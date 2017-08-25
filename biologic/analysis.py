@@ -288,7 +288,14 @@ class GCPL5:
                 dI = self.current[idx] - self.current[idx-1]
                 DCIR[int(self.rawcyclenumbers[idx])].append(abs(dV/dI*1000))
 
-        array = np.array([DCIR[cycle] for cycle in DCIR])
+        IRarray = [DCIR[cycle] for cycle in DCIR]
+
+        # Omit last cycle if unfinished
+        if len(IRarray[0]) != len(IRarray[-1]):
+            IRarray.pop()
+            DCIR.pop(np.max(list(DCIR.keys())))
+
+        IRarray = np.array(IRarray)
 
         DCIR_avg = []
         for cycle in DCIR:
@@ -296,7 +303,7 @@ class GCPL5:
 
         self.DCIR = {
             'cycles': list(DCIR.keys()),
-            'array': array,
+            'array': IRarray,
             'average': DCIR_avg
         }
 
@@ -325,7 +332,7 @@ class GCPL5:
         else:
             coloridx = np.linspace(0.25, 1, self.DCIR['array'].shape[1])
             for idx, pulse in enumerate(self.DCIR['array'].T, 1):
-                ax.plot(plotcycles, pulse, label='Pulse ' + idx, 
+                ax.plot(plotcycles, pulse, label='Pulse ' + str(idx), 
                     color=plt.cm.Purples(coloridx[idx-1]), linewidth=3)
             plottype = '_all'
 
