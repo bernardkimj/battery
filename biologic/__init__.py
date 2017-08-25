@@ -1,1 +1,2 @@
-from .analysis import internal_resistance
+from .analysis import GCPL
+from .analysis import GCPL5
