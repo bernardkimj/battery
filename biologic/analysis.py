@@ -120,7 +120,8 @@ class GCPL:
                 key = 'rest'
                 self.DCIR[int(self.rawcyclenumbers[idx])][key] = abs(dV/dI*1000)
 
-    def plot_IR_drop(self, IRtypes=None, xlim=None, ylim=None, show=False, save=False, imagetype='pdf'):
+    def plot_IR_drop(self, IRtypes=None, xlim=None, ylim=None, semilogy=False, 
+        show=False, save=False, imagetype='pdf'):
         ''' Plots extracted IR data vs cycle number
             IRtype accepts kwargs 'charge', 'discharge', 'rest', or 'average' as list
             e.g. ['charge', 'discharge',]
@@ -139,7 +140,10 @@ class GCPL:
                 plotcycles = [cycle for cycle in self.DCIR]
                 plotIR = [np.mean(list(self.DCIR[cycle].values())) for cycle in plotcycles]
 
-                ax.plot(plotcycles, plotIR, color=plotcolors[IRtype], linewidth=3, label=IRtype)
+                if semilogy:
+                    ax.semilogy(plotcycles, plotIR, color=plotcolors[IRtype], linewidth=3, label=IRtype)
+                else:
+                    ax.plot(plotcycles, plotIR, color=plotcolors[IRtype], linewidth=3, label=IRtype)
 
             else:
                 plotcycles = []
@@ -150,7 +154,10 @@ class GCPL:
 
                 plotIR = [self.DCIR[cycle][IRtype] for cycle in plotcycles]
 
-                ax.plot(plotcycles, plotIR, color=plotcolors[IRtype], linewidth=3, label=IRtype)
+                if semilogy:
+                    ax.semilogy(plotcycles, plotIR, color=plotcolors[IRtype], linewidth=3, label=IRtype)
+                else:
+                    ax.plot(plotcycles, plotIR, color=plotcolors[IRtype], linewidth=3, label=IRtype)
 
         if xlim:
             ax.set_xlim(xlim)
