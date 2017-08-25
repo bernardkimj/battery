@@ -143,8 +143,9 @@ class GCPL:
             else:
                 plotcycles = []
 
-                if IRtype in self.DCIR[cycle] for cycle in self.DCIR:
-                    plotcycles.append(cycle)
+                for cycle in self.DCIR:
+                    if IRtype in self.DCIR[cycle]:
+                        plotcycles.append(cycle)
 
                 plotIR = [self.DCIR[cycle][IRtype] for cycle in plotcycles]
 
@@ -178,16 +179,16 @@ class GCPL:
 
         for cycle in self.cycles[1:]:
             if np.remainder(cycle, plotcycleinterval) == 0:
-                SOC{cycle:{}}
+                SOC[cycle] = {}
 
         for cycle in SOC:
-            for voltage, Qdischarge in 
+            for voltage, Qdischarge in \
                 zip(self.cycles[cycle]['voltage'], self.cycles[cycle]['Qdischarge']):
 
                 if voltage != 0:
                     SOC[cycle][voltage] = Qdischarge
 
-        coloridx = np.linspace(0.25, 1 len(SOC))
+        coloridx = np.linspace(0.25, 1, len(SOC))
 
         for idx, cycle in enumerate(SOC):
             ax.plot(
@@ -305,7 +306,7 @@ class GCPL5:
         if average:
             plotIR = self.DCIR['average']
 
-            ax.plot(plotcycles, plotIR, color='b')
+            ax.plot(plotcycles, plotIR, color='b', label='Average')
             plottype = '_average'
 
         else:
