@@ -66,7 +66,7 @@ class GCPL:
         font = {'family': 'Arial', 'size': 16}
         matplotlib.rc('font', **font)
 
-        fig, ax = subplots(figsize=(16,9), dpi=75)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
         # Get list of all cycle numbers
         # Omit cycle 0 from plotting
@@ -112,12 +112,13 @@ class GCPL:
 
             if np.sign(self.current[idx-1]) == -1 and np.sign(self.current[idx]) == 1:
                 key = 'charge'
+                self.DCIR[int(self.rawcyclenumbers[idx])][key] = abs(dV/dI*1000)
             elif np.sign(self.current[idx-1]) == 0 and np.sign(self.current[idx]) == -1:
                 key = 'discharge'
+                self.DCIR[int(self.rawcyclenumbers[idx])][key] = abs(dV/dI*1000)
             elif np.sign(self.current[idx-1]) == 1 and np.sign(self.current[idx]) == 0:
                 key = 'rest'
-
-            self.DCIR[int(self.rawcyclenumbers[idx])][key] = abs(dV/dI*1000)
+                self.DCIR[int(self.rawcyclenumbers[idx])][key] = abs(dV/dI*1000)
 
     def plot_IR_drop(self, IRtypes=None, xlim=None, ylim=None, show=False, save=False, imagetype='pdf'):
         ''' Plots extracted IR data vs cycle number
@@ -175,33 +176,38 @@ class GCPL:
             plotcycleinterval = cycle interval to include on plot
             '''
 
-        SOC = {}
+        DOD = {}
 
-        for cycle in self.cycles[1:]:
+        for cycle in list(self.cycles.keys())[1:]:
             if np.remainder(cycle, plotcycleinterval) == 0:
-                SOC[cycle] = {}
+                DOD[cycle] = {'voltage':[], 'Qdischarge':[]}
 
-        for cycle in SOC:
+        # Remove last element of voltage and Qdischarge lists to avoid "tail" in graphs
+        # Artifact of splitting up by cycle/tester resolution
+        for cycle in DOD:
             for voltage, Qdischarge in \
-                zip(self.cycles[cycle]['voltage'], self.cycles[cycle]['Qdischarge']):
+                zip(self.cycles[cycle]['voltage'][0][:-1], self.cycles[cycle]['Qdischarge'][0][:-1]):
 
-                if voltage != 0:
-                    SOC[cycle][voltage] = Qdischarge
+                if Qdischarge != 0:
+                    DOD[cycle]['voltage'].append(voltage)
+                    DOD[cycle]['Qdischarge'].append(Qdischarge)
 
-        coloridx = np.linspace(0.25, 1, len(SOC))
+        font = {'family': 'Arial', 'size': 16}
+        matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
-        for idx, cycle in enumerate(SOC):
+        coloridx = np.linspace(0.25, 1, len(DOD))
+
+        for idx, cycle in enumerate(DOD):
             ax.plot(
-                list(reversed(SOC[cycle].values())), list(reversed(SOC[cycle].keys())),
-                linewidth=3, color=plt.cm.Blues(coloridx[idx]), legend='Cycle '+str(cycle))
+                DOD[cycle]['Qdischarge'], DOD[cycle]['voltage'],
+                linewidth=3, color=plt.cm.Blues(coloridx[idx]), label='Cycle '+str(cycle))
 
-        if xlim:
-            ax.set_xlim(xlim)
         if ylim:
             ax.set_ylim(ylim)
 
         ax.set_xlabel('Discharge Capacity [mAh]')
-        ax.set_yabel('Voltage [V]')
+        ax.set_ylabel('Voltage [V]')
         ax.set_title(self.filename[:-8] + '_DOD')
         ax.legend()
         ax.grid()
