@@ -17,7 +17,6 @@ import re
 font = {'family': 'Arial', 'size': 16}
 matplotlib.rc('font', **font)
 
-
 class EIS:
 
     ''' Analyzes data from Gamry EIS
@@ -205,6 +204,8 @@ class CV:
                 'current': current_cycle_current * 1000,
             }
 
+        self.title = filename[:-4]
+
         if reduce:
             CV.reduce_file(self)
 
@@ -286,46 +287,52 @@ class CV:
 
         return np.convolve(interval, window, 'valid')
 
-    def plot_current_voltage(self, cycle_index=0, imageformat='pdf', title=None, ylim=None, save=False):
+    def plot_current_voltage(self, cycle_index=0, xlim=None, ylim=None, 
+        title=None, show=False, save=False, imagetype='png'):
         ''' Plots current vs voltage for one or all cycles '''
 
         font = {'family': 'Arial', 'size': 16}
         matplotlib.rc('font', **font)
 
-        coloridx = np.linspace(0,1,len(self.cycles)) # for use with inferno cmap
+        coloridx = np.linspace(0.4,1,len(self.cycles)) # for use with Blues cmap
 
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
         if cycle_index:
             ax.plot(self.cycles[cycle_index]['voltage'],
                     self.cycles[cycle_index]['current'],
-                    marker='.', markersize=3,
-                    color=plt.cm.inferno(coloridx[cycle_index-1]))
+                    linewidth=2
+                    color=plt.cm.Blues(coloridx[cycle_index-1]))
         else:
             for i in range(1,len(self.cycles)):
                 ax.plot(self.cycles[i]['voltage'],
                         self.cycles[i]['current'],
-                        marker='.', markersize=3,
-                        color=plt.cm.inferno(coloridx[i-1]),
+                        linewidth=2,
+                        color=plt.cm.Blues(coloridx[i-1]),
                         label='Cycle '+str(i))
-            ax.legend(loc='upper left', fontsize=8, ncol=4)
+            ax.legend()
 
-        plt.xlabel('Potential (V)')
-        plt.ylabel('Current (mA)')
-        plt.grid(b=True, which='major', color='0.9', linestyle='-')
+        ax.set_xlabel('Potential [V]')
+        ax.set_ylabel('Current [mA]')
+        ax.grid()
 
+        if xlim:
+            ax.set_xlim(xlim)
         if ylim:
-            plt.ylim(ylim)
-        else:
-            plt.ylim([-25, 25])
+            ax.set_ylim(ylim)
 
-        plt.title(str(title[:-4]) + '_C' + str(cycle_index))
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title + '_C' + str(cycle_index))
+
+        if show:
+            plt.show()
 
         if save:
-            plt.savefig('export_' + title[0:-4] + '_C' + str(cycle_index) + '.' + str(imageformat))
-            plt.clf()
+            plt.savefig('single_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
 
-        plt.close()
+        plt.close(fig)
 
     def extrema_smoothed_wd(self, title=None, save_csv=False, showplot=False, saveplot=False):
         ''' Extracts maximum and minumum points on each CV curve for each cycle
@@ -710,39 +717,42 @@ class CV_batch:
             sampleidx = int(match.group(0)[1:])
             self.allcycles[sampleidx] = exported.cycles
 
-    def plot_current_voltage(self, batchsize, cycle_index=0, title=None, ylim=None, show=False, save=False):
+        titlesearch = re.search(alldata[0])
+
+    def plot_current_voltage(self, cycle_index=0, xlim=None, ylim=None,
+        title=None, show=False, save=False):
         ''' Plots current vs voltage by cycle with all samples on one graph '''
 
         font = {'family': 'Arial', 'size': 16}
         matplotlib.rc('font', **font)
 
-        coloridx = np.linspace(0,1,batchsize) # keeps colors constant per sample
+        coloridx = np.linspace(0.4,1,len(self.allcycles)) # for use with Blues colormap
 
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
-        for sample in sorted(self.allcycles):
+        for idx, sample in enumerated(sorted(self.allcycles)):
             if cycle_index:
                 ax.plot(self.allcycles[sample][cycle_index]['voltage'],
                         self.allcycles[sample][cycle_index]['current'],
-                        marker='.', markersize=8,
-                        color=plt.cm.viridis(coloridx[int(sample)-1]),
+                        linewidth=2,
+                        color=plt.cm.Blues(coloridx[int(idx)-1]),
                         label='S'+str(sample))
-            # COMMENTED OUT FOR NOW BECAUSE DOESN'T MAKE SENSE TO INCLUDE FOR NOW
-            # else:
-            #     for i in range(1,len(self.allcycles[sample])):
-            #         ax.plot(self.allcycles[sample][i]['voltage'],
-            #                 self.allcycles[sample][i]['current'],
-            #                 marker='.', markersize=12)
 
-        ax.legend(loc='upper left', fontsize=10, ncol=3)
-        plt.xlabel('Potential (V)')
-        plt.ylabel('Current (mA)')
-        plt.grid(b=True, which='major', color='0.8', linestyle='-')
+        ax.legend()
+        ax.set_xlabel('Potential [V]')
+        ax.set_ylabel('Current [mA/cm' +r'$^2$' +']')
+        ax.grid()
 
+        if xlim:
+            ax.set_xlim(xlim)
         if ylim:
-            plt.ylim(ylim)
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
         else:
-            plt.ylim([-25, 25])
+            ax.set_title()
+
 
         figtitle = title + '_C' + str(cycle_index) + '_n=' + str(len(self.allcycles))
         plt.title(figtitle)
