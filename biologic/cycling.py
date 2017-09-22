@@ -5,6 +5,7 @@
     Principal Investigators: Paul Wright, James Evans
     Institution: University of California, Berkeley '''
 
+from battery.utilities import utilities
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -78,7 +79,7 @@ class GCPL:
             self.voltage.append(float(row[voltageidx]))
             self.current.append(float(row[currentidx]))
 
-        titlematch = re.search(r'CYCLE.*\d{1}_C', self.filename)
+        titlematch = re.search(r'CELL.*\d{1}_C', self.filename)
         self.title = titlematch.group(0)[:-2]
 
     def get_IR_data(self):
@@ -153,7 +154,6 @@ class GCPL:
 
         # Get list of all cycle numbers
         # Omit cycle 0 from plotting
-        cycles = list(self.cycles.keys())[1:]
 
         # Plot both discharge and charge by default
         if discharge:
@@ -456,7 +456,9 @@ class GCPL5:
             self.voltage.append(float(row[voltageidx]))
             self.current.append(float(row[currentidx]))
 
-        titlematch = re.search(r'PULSE.*\d{1}_C', self.filename)
+        self.get_IR_data()
+
+        titlematch = re.search(r'CELL.*\d{1}_C', self.filename)
         self.title = titlematch.group(0)[:-2]
 
     def get_IR_data(self):
@@ -494,12 +496,7 @@ class GCPL5:
 
     def plot_IR_drop(self, average=True, xlim=None, ylim=None, 
         title=None, show=False, save=False, imagetype='png'):
-        ''' Plots extracted IR data vs cycle number
-            IRtype accepts kwargs 'charge', 'discharge', 'rest', or 'average' as list
-            e.g. ['charge', 'discharge',]
-            ''' 
-
-        self.get_IR_data()
+        ''' Plots extracted IR data vs cycle number ''' 
 
         font = {'family': 'Arial', 'size': 16}
         matplotlib.rc('font', **font)
@@ -507,12 +504,9 @@ class GCPL5:
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
         plotcolors = {'charge':'r', 'discharge':'g', 'rest':'b', 'average':'k'}
 
-        plotcycles = self.DCIR['cycles']
-
         if average:
-            plotIR = self.DCIR['average']
-
-            ax.plot(plotcycles, plotIR, color='b', label='Average')
+            ax.plot(self.DCIR['cycles'], self.DCIR['average'], 
+                color='b', label='Average')
             plottype = '_average'
 
         else:
@@ -532,7 +526,6 @@ class GCPL5:
         else:
             ax.set_title(self.title + plottype)
 
-
         ax.set_xlabel('Cycle Number')
         ax.set_ylabel('DC Internal Resistance [Ω]')
         ax.legend()
@@ -545,6 +538,89 @@ class GCPL5:
             plt.savefig(self.title + '_DCIR' + plottype + '.' + imagetype)
 
         plt.close(fig)
+
+class GCPL5_batch:
+    ''' Plots batches of samples together
+        Uses defined methods from GCPL5 class '''
+
+    def __init__(self, files):
+        ''' Initializes and organizes files 
+            Dictionary of GCPL5 objects with overarching title '''
+
+        self.alldata = {}
+
+        for file in files:
+            data = GCPL5(file)
+            samplesearch = re.search(r'_S\d{1,2}', data.filename)
+            sample = samplesearch.group(0)[2:]
+            self.alldata[int(sample)] = data
+
+        titlesearch = re.search(r'CELL.*\d{8}', \
+            self.alldata[list(self.alldata.keys())[0]].title)
+        self.title = titlesearch.group(0)
+
+    def plot_DCIR_average(self, confidence=0.95, xlim=None, ylim=None, title=None, 
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots average DCIR vs cycle number
+            Includes confidence interval '''
+
+        # Combines all sample data into list of tuples (x,y) by sample number (len = # of samples)
+        data = [(self.alldata[sample].DCIR['cycles'], self.alldata[sample].DCIR['average']) \
+            for sample in sorted(list(self.alldata.keys()))]
+
+        cycles, mean, std, lcl, ucl = utilities.batch_average_plot(data, confidence=confidence)
+
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        for sample in data:
+            ax.plot(sample[0], sample[1], color='b', linewidth=3, alpha=0.2)
+        ax.plot(cycles, mean, color='b', linewidth=3)
+
+        if confidence:
+            ax.plot(cycles, lcl, color='b', linestyle='--', linewidth=2, 
+                label=str(confidence)[2:]+'% Confidence Interval (t-test)')
+            ax.plot(cycles, ucl, color='b', linestyle='--', linewidth=2)
+            ax.fill_between(cycles, ucl, lcl, color='b', alpha=0.2)
+        else:
+            ax.plot(cycles, mean+std, color='b', linestyle='--', linewidth=2, 
+                label='±1 '+r'$\sigma$')
+            ax.plot(cycles, mean-std, color='b', linestyle='--', linewidth=2)
+            ax.fill_between(cycles, mean+std, mean-std, color='b', alpha=0.2)
+
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel('DCIR [Ω]')
+        ax.legend()
+        ax.grid()
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        if show:
+            plt.show()
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_' + self.title + '_DCIR_average' + '.' + imagetype)
+
+        plt.close(fig)
+
+
+
+
+
+
+
 
 
 

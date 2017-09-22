@@ -1,10 +1,9 @@
 ''' Module for analyzing results retrieved from Gamry
 
-Author: Rich Winslow
+Author: Bernard Kim
 Principal Investigators: Prof. Paul Wright, Prof. James Evans
 University: University of California, Berkeley
 
-Further edits: Bernard Kim
 '''
 
 import matplotlib
@@ -155,13 +154,14 @@ class CV:
 
     '''
 
-    def __init__(self, filename=None, reduce=False):
+    def __init__(self, filename=None):
         ''' Opens file and retrieves data. '''
 
     # Pt  T     Vf    Im  Vu  Sig Ach IERange Over
     # s   V vs. Ref.  A   V   V   V   #       bits
 
         self.cycles = {}
+        cyclenumbers = []
 
         with open(filename, errors='replace') as f:
             rows = f.readlines()
@@ -175,8 +175,9 @@ class CV:
                 row = row.split()
                 try:
                     if row:
-                        if row[0][0:5] == 'CURVE':
+                        if row[0][0:5] == 'CURVE' and len(row[0]) > 5:
                             curve_number = int(row[0][5::])
+                            cyclenumbers.append(curve_number)
                             switch = index + 2
                             if current_cycle_time:
                                 self.cycles[curve_number-1] = {
@@ -198,16 +199,14 @@ class CV:
                     raise
 
             # Save data and convert current to mA
-            self.cycles[curve_number] = {
-                'time': current_cycle_time,
-                'voltage': current_cycle_voltage,
-                'current': current_cycle_current * 1000,
-            }
+            if len(cyclenumbers) > 0:
+                self.cycles[curve_number] = {
+                    'time': current_cycle_time,
+                    'voltage': current_cycle_voltage,
+                    'current': current_cycle_current * 1000,
+                }
 
         self.title = filename[:-4]
-
-        if reduce:
-            CV.reduce_file(self)
 
     def is_num(self, s):
         try:
@@ -215,40 +214,6 @@ class CV:
             return True
         except ValueError:
             return False
-
-    def reduce_file(self):
-        ''' Reduces file size of oversampled data '''
-
-        stepsize = 10 # ideal stepsize, mV/s
-
-        for curve_number in self.cycles:
-            if curve_number == min(list(self.cycles)) and len(self.cycles[curve_number]['time']) > 6000/stepsize + 1:
-                samplerate = (len(self.cycles[curve_number]['time'])-1)/(6000/stepsize)
-                CV.undersample(self, samplerate, curve_number)
-            elif curve_number == max(list(self.cycles)) and len(self.cycles[curve_number]['time']) > 2000/stepsize:
-                samplerate = len(self.cycles[curve_number]['time'])/(2000/stepsize)
-                CV.undersample(self, samplerate, curve_number)
-            elif len(self.cycles[curve_number]['time']) > 8000/stepsize:
-                samplerate = len(self.cycles[curve_number]['time'])/(8000/stepsize)
-                CV.undersample(self, samplerate, curve_number)
-
-    def undersample(self, samplerate, curve_number):
-        ''' Undersampling algorithm '''
-
-        reducedidx = []
-        for idx in list(range(len(self.cycles[curve_number]['time']))):
-            if idx%samplerate == 0:
-                reducedidx.append(idx)
-
-        reducedtime = []; reducedvoltage = []; reducedcurrent = []
-        for idx in reducedidx:
-            reducedtime.append(self.cycles[curve_number]['time'][idx])
-            reducedvoltage.append(self.cycles[curve_number]['voltage'][idx])
-            reducedcurrent.append(self.cycles[curve_number]['current'][idx])
-
-        self.cycles[curve_number]['time'] = reducedtime
-        self.cycles[curve_number]['voltage'] = reducedvoltage
-        self.cycles[curve_number]['current'] = reducedcurrent
 
     def find_min_max(self, list, param, extreme):
         ''' For list with dictionary entries [{}, {},], finds maximum or 
@@ -301,7 +266,7 @@ class CV:
         if cycle_index:
             ax.plot(self.cycles[cycle_index]['voltage'],
                     self.cycles[cycle_index]['current'],
-                    linewidth=2
+                    linewidth=2,
                     color=plt.cm.Blues(coloridx[cycle_index-1]))
         else:
             for i in range(1,len(self.cycles)):
@@ -334,7 +299,7 @@ class CV:
 
         plt.close(fig)
 
-    def extrema_smoothed_wd(self, title=None, save_csv=False, showplot=False, saveplot=False):
+    def extrema_smoothed_wd(self, save_csv=False, showplot=False, saveplot=False):
         ''' Extracts maximum and minumum points on each CV curve for each cycle
             Uses gradient-window (g-w) method on smoothed curves
             Written by Bernard Kim '''
@@ -470,20 +435,20 @@ class CV:
                 ax.set_xlabel('Voltage [V]')
                 ax.set_ylabel('Current [mA]')
                 ax.legend()
-                plt.title(str(title[0:-4]) + '_C' + str(cycle))
+                ax.set_title('wd_' + self.title + '_C' + str(cycle))
                 ax.grid()
 
                 plt.show()
                 plt.close()
 
                 if saveplot:
-                    plt.savefig(title[0:-4] + '_C' + str(cycle) + 'extrema' + '.pdf', format='pdf')
+                    plt.savefig('wd_' + self.title + '_C' + str(cycle) + '.png')
 
         if save_csv:
             # write data to csv file
-            filename = str(title)
+            filename = str(self.title)
 
-            with open('extrema_' + filename[:-4] + '.csv', 'w', newline='\n') as f:
+            with open('extrema_' + filename + '.csv', 'w', newline='\n') as f:
                 fwrite = csv.writer(f, delimiter=',',quotechar='"')
                 fwrite.writerow(['Cycle','E_p_ox (V)','I_p_ox (mA)','E_p_red (V)', 'I_p_red (mA)'])
 
@@ -497,6 +462,40 @@ class CV:
                     fwrite.writerow(row)
 
                 f.close
+
+    def reduce_file_LEGACY(self):
+        ''' Reduces file size of oversampled data '''
+
+        stepsize = 10 # ideal stepsize, mV/s
+
+        for curve_number in self.cycles:
+            if curve_number == min(list(self.cycles)) and len(self.cycles[curve_number]['time']) > 6000/stepsize + 1:
+                samplerate = (len(self.cycles[curve_number]['time'])-1)/(6000/stepsize)
+                CV.undersample(self, samplerate, curve_number)
+            elif curve_number == max(list(self.cycles)) and len(self.cycles[curve_number]['time']) > 2000/stepsize:
+                samplerate = len(self.cycles[curve_number]['time'])/(2000/stepsize)
+                CV.undersample(self, samplerate, curve_number)
+            elif len(self.cycles[curve_number]['time']) > 8000/stepsize:
+                samplerate = len(self.cycles[curve_number]['time'])/(8000/stepsize)
+                CV.undersample(self, samplerate, curve_number)
+
+    def undersample_LEGACY(self, samplerate, curve_number):
+        ''' Undersampling algorithm '''
+
+        reducedidx = []
+        for idx in list(range(len(self.cycles[curve_number]['time']))):
+            if idx%samplerate == 0:
+                reducedidx.append(idx)
+
+        reducedtime = []; reducedvoltage = []; reducedcurrent = []
+        for idx in reducedidx:
+            reducedtime.append(self.cycles[curve_number]['time'][idx])
+            reducedvoltage.append(self.cycles[curve_number]['voltage'][idx])
+            reducedcurrent.append(self.cycles[curve_number]['current'][idx])
+
+        self.cycles[curve_number]['time'] = reducedtime
+        self.cycles[curve_number]['voltage'] = reducedvoltage
+        self.cycles[curve_number]['current'] = reducedcurrent
 
     def extrema_smoothed_radius_LEGACY(self, title=None):
         ''' Extracts maximum and minimum points on each CV curve for each cycle
@@ -706,21 +705,22 @@ class CV_batch:
     Author: Bernard Kim
     '''
 
-    def __init__(self, alldata, reduce=False):
+    def __init__(self, alldata):
         # Accepts lists of class CV
         self.allcycles = {}
 
         for file in alldata:
-            exported = CV(file, reduce=reduce)
+            exported = CV(file)
 
             match = re.search(r'S\d{1,2}', file)
             sampleidx = int(match.group(0)[1:])
             self.allcycles[sampleidx] = exported.cycles
 
-        titlesearch = re.search(alldata[0])
+        titlesearch = re.search(r'GPE_.*_S\d{1}', alldata[0])
+        self.title = titlesearch.group(0)[:-3]
 
     def plot_current_voltage(self, cycle_index=0, xlim=None, ylim=None,
-        title=None, show=False, save=False):
+        title=None, show=False, save=False, imagetype='png'):
         ''' Plots current vs voltage by cycle with all samples on one graph '''
 
         font = {'family': 'Arial', 'size': 16}
@@ -730,12 +730,12 @@ class CV_batch:
 
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
-        for idx, sample in enumerated(sorted(self.allcycles)):
+        for idx, sample in enumerate(sorted(self.allcycles)):
             if cycle_index:
                 ax.plot(self.allcycles[sample][cycle_index]['voltage'],
                         self.allcycles[sample][cycle_index]['current'],
                         linewidth=2,
-                        color=plt.cm.Blues(coloridx[int(idx)-1]),
+                        color=plt.cm.Blues(coloridx[int(idx)]),
                         label='S'+str(sample))
 
         ax.legend()
@@ -751,19 +751,15 @@ class CV_batch:
         if title:
             ax.set_title(title)
         else:
-            ax.set_title()
-
-
-        figtitle = title + '_C' + str(cycle_index) + '_n=' + str(len(self.allcycles))
-        plt.title(figtitle)
+            ax.set_title('batch_' + self.title + '_C' + str(cycle_index))
 
         if show:
             plt.show()
 
         if save:
-            plt.savefig('export_' + figtitle + '.pdf', format='pdf')
+            plt.savefig('batch_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
 
-        plt.close()
+        plt.close(fig)
 
     def plot_extrema(files, title=None, samplen=None, averaged=False, errorbar=None, save=False):
         ''' Plots exported extrema data into two plots of average max and min 
