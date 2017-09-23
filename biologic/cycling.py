@@ -559,6 +559,47 @@ class GCPL5_batch:
             self.alldata[list(self.alldata.keys())[0]].title)
         self.title = titlesearch.group(0)
 
+    def plot_DCIR_discrete(self, xlim=None, ylim=None, title=None, 
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots discrete curves for DCIR vs cycle number '''
+
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
+        coloridx = np.linspace(0,1,10) # For use with tab10 colormap
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        for idx, sample in enumerate(sorted(list(self.alldata.keys()))):
+            ax.plot(self.alldata[sample].DCIR['cycles'], self.alldata[sample].DCIR['average'],
+                color=plt.cm.tab10(coloridx[idx]), linewidth=3,
+                label='S'+str(sample))
+
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel('DCIR [Ω]')
+        ax.legend()
+        ax.grid()
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        if show:
+            plt.show()
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_' + self.title + '_DCIR_discrete' + '.' + imagetype)
+
+        plt.close(fig)
+
+
     def plot_DCIR_average(self, confidence=0.95, xlim=None, ylim=None, title=None, 
         show=False, save=False, savename=None, imagetype='png'):
         ''' Plots average DCIR vs cycle number

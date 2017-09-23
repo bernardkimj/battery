@@ -761,125 +761,267 @@ class CV_batch:
 
         plt.close(fig)
 
-    def plot_extrema(files, title=None, samplen=None, averaged=False, errorbar=None, save=False):
-        ''' Plots exported extrema data into two plots of average max and min 
-            voltage and currents with stdev error bars '''
 
-        # instantiate lists for relevant data
-        # these need to be lists of lists, where sublists are for different cycles?
-        cycles = list(range(1,7)) # hardcoded as 6 cycles for now, possibly make variable later
-        V_red, I_red = [[] for cycle in cycles], [[] for cycle in cycles]
-        V_ox, I_ox = [[] for cycle in cycles], [[] for cycle in cycles]
+class CV_extrema_plot:
+    ''' Method for plotting exported extrema data 
+        Plots individual peak coordinates on same I-V curve '''
 
-        V_red_avg, V_red_std = [], []
-        I_red_avg, I_red_std = [], []
-        V_ox_avg, V_ox_std = [], []
-        I_ox_avg, I_ox_std = [], []
+    def __init__(self, files):
+        ''' Process raw csv files into useable data structures
+            Assumes csv files have been generated from CV class '''
 
-        # construct dictionary 'data' compiling data from csv files
+        self.alldata = {}
+
+        titlesearch = re.search(r'(GPE|IL).*_S', files[0])
+        self.title = titlesearch.group(0)[:-2]
+
+        # scansearch = re.search(r'\d{1,3}mVs',files[0])
+        # self.scan = scansearch.group(0)
+
+        # Based off headers from generated csv files from CV class
+        # headers = ['Cycle', 'Epa [V]', 'Ipa [mA]', 'Epc [V]', 'Ipc [A]']
+        headers = ['Cycle', 'E_p_ox (V)', 'I_p_ox (mA)', 'E_p_red (V)', 'I_p_red (mA)']
+
         for file in files:
-            with open(file) as f:
-                reader = csv.DictReader(f)
-                for idx,row in enumerate(reader):
-                    V_ox[idx].append(float(row['E_p_ox (V)']))
-                    I_ox[idx].append(float(row['I_p_ox (mA)']))
-                    V_red[idx].append(float(row['E_p_red (V)']))
-                    I_red[idx].append(float(row['I_p_red (mA)']))
+            # Get sample number
+            samplesearch = re.search(r'_S\d{1,2}', file)
+            sample = samplesearch.group(0)[2:]
 
-        V_ox_arr = np.array(V_ox)
-        V_ox_arr[V_ox_arr == 0] = 'nan'
-        V_ox_rows, V_ox_cols = V_ox_arr.shape
+            rows = list(csv.reader(open(file), delimiter=','))
+            idxs = []
 
-        I_ox_arr = np.array(I_ox)
-        I_ox_arr[I_ox_arr == 0] = 'nan'
-        I_ox_rows, I_ox_cols = I_ox_arr.shape
+            for header in headers:
+                idxs.append(rows[0].index(header))
 
-        V_red_arr = np.array(V_red)
-        V_red_arr[V_red_arr == 0] = 'nan'
-        V_red_rows, V_red_cols = V_red_arr.shape
+            # Robustness to be order-agnostic within csv
+            cycleidx = idxs[0]
+            Epaidx, Ipaidx = idxs[1], idxs[2]
+            Epcidx, Ipcidx = idxs[3], idxs[4]
 
-        I_red_arr = np.array(I_red)
-        I_red_arr[I_red_arr == 0] = 'nan'
-        I_red_rows, I_red_cols = I_red_arr.shape
+            # Ensuring cycle numbers are sorted
+            cyclenumbers = [int(row[cycleidx]) for row in rows[1:]]
+            cyclenumbers.sort()
 
-        markers = ['.','o','v','^','s','p','d','h','*','x','8','D']
+            cycles = {}
+            for cyclenumber in cyclenumbers:
+                cycles[cyclenumber] = {
+                    'Epa': [],
+                    'Ipa': [],
+                    'Epc': [],
+                    'Ipc': [],
+                }
 
-        ## Begin plotting section
-        font = {'family': 'Arial', 'size': 13}
+            for row in rows[1:]:
+                cycles[int(row[cycleidx])]['Epa'].append(float(row[Epaidx]))
+                cycles[int(row[cycleidx])]['Ipa'].append(float(row[Ipaidx]))
+                cycles[int(row[cycleidx])]['Epc'].append(float(row[Epcidx]))
+                cycles[int(row[cycleidx])]['Ipc'].append(float(row[Ipcidx]))
+
+            self.alldata[int(sample)] = cycles
+
+    def plot_extrema(self, xlim=None, ylim=None, title=None,
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots extrema points from CV on i-v plot
+            Samples are plotted as series of points for each cycle '''
+
+        maxlen = 0
+        for sample in self.alldata:
+            if len(self.alldata[sample]) > maxlen:
+                maxlen = len(self.alldata[sample])
+
+        # Based on maximum number of cycles for all samples
+        coloridx = np.linspace(0.4, 1, maxlen)
+
+        cmapmaster = {
+            0: [plt.cm.Greys(idx) for idx in coloridx],
+            1: [plt.cm.Purples(idx) for idx in coloridx],
+            2: [plt.cm.Blues(idx) for idx in coloridx],
+            3: [plt.cm.Greens(idx) for idx in coloridx],
+            4: [plt.cm.Oranges(idx) for idx in coloridx],
+            5: [plt.cm.Reds(idx) for idx in coloridx],
+            6: [plt.cm.spring(idx) for idx in coloridx],
+            7: [plt.cm.cool(idx) for idx in coloridx],
+        }
+
+        # markermaster = ['o', 's', '^', '*', 'x', 'D', '+', '_']
+
+        font = {'family': 'Arial', 'size': 28}
         matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+        marker, markersize, markeredgecolor = '.', 25, 'k'
 
-        fig, (ax_V_ox, ax_V_red) = plt.subplots(2, 1, sharex=True)
+        for cmidx, sample in enumerate(sorted(list(self.alldata.keys()))):
+            for idx, cycle in enumerate(sorted(list(self.alldata[sample].keys()))):
+                if cycle == max(list(self.alldata[sample].keys())):
+                    ax.plot(self.alldata[sample][cycle]['Epa'], self.alldata[sample][cycle]['Ipa'], 
+                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
+                        marker=marker, markersize=markersize,
+                        label='S'+str(sample))
+                    ax.plot(self.alldata[sample][cycle]['Epc'], self.alldata[sample][cycle]['Ipc'], 
+                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
+                        marker=marker, markersize=markersize,)
+                else:
+                    ax.plot(self.alldata[sample][cycle]['Epa'], self.alldata[sample][cycle]['Ipa'], 
+                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
+                        marker=marker, markersize=markersize,)
+                    ax.plot(self.alldata[sample][cycle]['Epc'], self.alldata[sample][cycle]['Ipc'], 
+                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
+                        marker=marker, markersize=markersize,)
 
-        ax_V_ox.set_title('Anodic Scan')
-        ax_I_ox = ax_V_ox.twinx()
-        ax_V_ox.set_ylabel('Voltage (V)', color='b')
-        ax_V_ox.tick_params('y', colors='b')
-        ax_I_ox.set_ylabel('Current (mA)', color='r')
-        ax_I_ox.tick_params('y', colors='r')
+        ax.set_xlabel('Potential [V]')
+        ax.set_ylabel('Current [mA]')
+        ax.legend()
+        ax.grid()
 
-        ax_V_red.set_title('Cathodic Scan')
-        ax_I_red = ax_V_red.twinx()
-        ax_V_red.set_xlabel('Cycle')
-        ax_V_red.set_ylabel('Voltage (V)', color='b')
-        ax_V_red.tick_params('y', colors='b')
-        ax_I_red.set_ylabel('Current (mA)', color='r')
-        ax_I_red.tick_params('y', colors='r')
+        if xlim:
+            ax.set_xlim(xlim)
+        else:
+            ax.set_xlim([-2,2])
 
-        if averaged: # For averaged batch processing of all samples
-            for an_V,an_I,ca_V,ca_I in zip(V_ox_arr,I_ox_arr,V_red_arr,I_red_arr):
-                V_ox_avg.append(np.nanmean(an_V))
-                V_ox_std.append(np.nanstd(an_V, ddof=1))
-                I_ox_avg.append(np.nanmean(an_I))
-                I_ox_std.append(np.nanstd(an_I, ddof=1))
-                V_red_avg.append(np.nanmean(ca_V))
-                V_red_std.append(np.nanstd(ca_V, ddof=1))
-                I_red_avg.append(np.nanmean(ca_I))
-                I_red_std.append(np.nanstd(ca_I, ddof=1))
 
-            if errorbar: # With errorbars shown (y axes may be blown out of scale)
-                ax_V_ox.errorbar(
-                    cycles, V_ox_avg, yerr=V_ox_std, 
-                    color='b', marker='.', markersize=10,
-                    capsize=10, elinewidth=2)
-                ax_I_ox.errorbar(
-                    cycles, I_ox_avg, yerr=I_ox_std, 
-                    color='r', marker='.', markersize=10,
-                    capsize=10, elinewidth=2)
-                ax_V_red.errorbar(
-                    cycles, V_red_avg, yerr=V_red_std, 
-                    color='b', marker='.', markersize=10,
-                    capsize=10, elinewidth=2)
-                ax_I_red.errorbar(
-                    cycles, I_red_avg, yerr=I_red_std, 
-                    color='r', marker='.', markersize=10,
-                    capsize=10, elinewidth=2)
-                figtitle = 'batch_avg_eb_' + title + '_n='+ str(samplen)
+        if ylim:
+            ax.set_ylim(ylim)
 
-            else: # Without errorbars shown
-                ax_V_ox.plot(cycles, V_ox_avg, color='b')
-                ax_V_ox.set_ylim([0, 1.5])
-                ax_I_ox.plot(cycles, I_ox_avg, color='r')
-                ax_I_ox.set_ylim([0, 20])
-                ax_V_red.plot(cycles, V_red_avg, color='b')
-                ax_V_red.set_ylim([-1.5, 0])
-                ax_I_red.plot(cycles, I_red_avg, color='r')
-                ax_I_red.set_ylim([-20, 0])
-                figtitle = 'batch_avg_' + title + '_n='+ str(samplen)
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
 
-        else: # For all samples on the same plot
-            for V_ox_col in range(V_ox_cols):
-                ax_V_ox.plot(cycles, V_ox_arr[:,V_ox_col], color='b',marker=markers[V_ox_col])
-            for I_ox_col in range(I_ox_cols):
-                ax_I_ox.plot(cycles, I_ox_arr[:,I_ox_col], color='r',marker=markers[I_ox_col])
-            for V_red_col in range(V_red_cols):
-                ax_V_red.plot(cycles, V_red_arr[:,V_red_col], color='b',marker=markers[V_red_col])
-            for I_red_col in range(I_red_cols):
-                ax_I_red.plot(cycles, I_red_arr[:,I_red_col], color='r',marker=markers[I_red_col])
-            figtitle = 'batch_' + title + '_n='+ str(samplen)
-
-        plt.suptitle(figtitle)
+        if show:
+            plt.show()
 
         if save:
-            plt.savefig(figtitle + '.eps', format='eps')
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('extrema_batch_' + self.title + '.' + imagetype)
 
-        plt.show()
+        plt.close(fig)
+
+
+
+
+
+
+    # def plot_extrema(files, title=None, samplen=None, averaged=False, errorbar=None, save=False):
+    #     ''' Plots exported extrema data into two plots of average max and min 
+    #         voltage and currents with stdev error bars '''
+
+    #     # instantiate lists for relevant data
+    #     # these need to be lists of lists, where sublists are for different cycles?
+    #     cycles = list(range(1,7)) # hardcoded as 6 cycles for now, possibly make variable later
+    #     V_red, I_red = [[] for cycle in cycles], [[] for cycle in cycles]
+    #     V_ox, I_ox = [[] for cycle in cycles], [[] for cycle in cycles]
+
+    #     V_red_avg, V_red_std = [], []
+    #     I_red_avg, I_red_std = [], []
+    #     V_ox_avg, V_ox_std = [], []
+    #     I_ox_avg, I_ox_std = [], []
+
+    #     # construct dictionary 'data' compiling data from csv files
+    #     for file in files:
+    #         with open(file) as f:
+    #             reader = csv.DictReader(f)
+    #             for idx,row in enumerate(reader):
+    #                 V_ox[idx].append(float(row['E_p_ox (V)']))
+    #                 I_ox[idx].append(float(row['I_p_ox (mA)']))
+    #                 V_red[idx].append(float(row['E_p_red (V)']))
+    #                 I_red[idx].append(float(row['I_p_red (mA)']))
+
+    #     V_ox_arr = np.array(V_ox)
+    #     V_ox_arr[V_ox_arr == 0] = 'nan'
+    #     V_ox_rows, V_ox_cols = V_ox_arr.shape
+
+    #     I_ox_arr = np.array(I_ox)
+    #     I_ox_arr[I_ox_arr == 0] = 'nan'
+    #     I_ox_rows, I_ox_cols = I_ox_arr.shape
+
+    #     V_red_arr = np.array(V_red)
+    #     V_red_arr[V_red_arr == 0] = 'nan'
+    #     V_red_rows, V_red_cols = V_red_arr.shape
+
+    #     I_red_arr = np.array(I_red)
+    #     I_red_arr[I_red_arr == 0] = 'nan'
+    #     I_red_rows, I_red_cols = I_red_arr.shape
+
+    #     markers = ['.','o','v','^','s','p','d','h','*','x','8','D']
+
+    #     ## Begin plotting section
+    #     font = {'family': 'Arial', 'size': 13}
+    #     matplotlib.rc('font', **font)
+
+    #     fig, (ax_V_ox, ax_V_red) = plt.subplots(2, 1, sharex=True)
+
+    #     ax_V_ox.set_title('Anodic Scan')
+    #     ax_I_ox = ax_V_ox.twinx()
+    #     ax_V_ox.set_ylabel('Voltage (V)', color='b')
+    #     ax_V_ox.tick_params('y', colors='b')
+    #     ax_I_ox.set_ylabel('Current (mA)', color='r')
+    #     ax_I_ox.tick_params('y', colors='r')
+
+    #     ax_V_red.set_title('Cathodic Scan')
+    #     ax_I_red = ax_V_red.twinx()
+    #     ax_V_red.set_xlabel('Cycle')
+    #     ax_V_red.set_ylabel('Voltage (V)', color='b')
+    #     ax_V_red.tick_params('y', colors='b')
+    #     ax_I_red.set_ylabel('Current (mA)', color='r')
+    #     ax_I_red.tick_params('y', colors='r')
+
+    #     if averaged: # For averaged batch processing of all samples
+    #         for an_V,an_I,ca_V,ca_I in zip(V_ox_arr,I_ox_arr,V_red_arr,I_red_arr):
+    #             V_ox_avg.append(np.nanmean(an_V))
+    #             V_ox_std.append(np.nanstd(an_V, ddof=1))
+    #             I_ox_avg.append(np.nanmean(an_I))
+    #             I_ox_std.append(np.nanstd(an_I, ddof=1))
+    #             V_red_avg.append(np.nanmean(ca_V))
+    #             V_red_std.append(np.nanstd(ca_V, ddof=1))
+    #             I_red_avg.append(np.nanmean(ca_I))
+    #             I_red_std.append(np.nanstd(ca_I, ddof=1))
+
+    #         if errorbar: # With errorbars shown (y axes may be blown out of scale)
+    #             ax_V_ox.errorbar(
+    #                 cycles, V_ox_avg, yerr=V_ox_std, 
+    #                 color='b', marker='.', markersize=10,
+    #                 capsize=10, elinewidth=2)
+    #             ax_I_ox.errorbar(
+    #                 cycles, I_ox_avg, yerr=I_ox_std, 
+    #                 color='r', marker='.', markersize=10,
+    #                 capsize=10, elinewidth=2)
+    #             ax_V_red.errorbar(
+    #                 cycles, V_red_avg, yerr=V_red_std, 
+    #                 color='b', marker='.', markersize=10,
+    #                 capsize=10, elinewidth=2)
+    #             ax_I_red.errorbar(
+    #                 cycles, I_red_avg, yerr=I_red_std, 
+    #                 color='r', marker='.', markersize=10,
+    #                 capsize=10, elinewidth=2)
+    #             figtitle = 'batch_avg_eb_' + title + '_n='+ str(samplen)
+
+    #         else: # Without errorbars shown
+    #             ax_V_ox.plot(cycles, V_ox_avg, color='b')
+    #             ax_V_ox.set_ylim([0, 1.5])
+    #             ax_I_ox.plot(cycles, I_ox_avg, color='r')
+    #             ax_I_ox.set_ylim([0, 20])
+    #             ax_V_red.plot(cycles, V_red_avg, color='b')
+    #             ax_V_red.set_ylim([-1.5, 0])
+    #             ax_I_red.plot(cycles, I_red_avg, color='r')
+    #             ax_I_red.set_ylim([-20, 0])
+    #             figtitle = 'batch_avg_' + title + '_n='+ str(samplen)
+
+    #     else: # For all samples on the same plot
+    #         for V_ox_col in range(V_ox_cols):
+    #             ax_V_ox.plot(cycles, V_ox_arr[:,V_ox_col], color='b',marker=markers[V_ox_col])
+    #         for I_ox_col in range(I_ox_cols):
+    #             ax_I_ox.plot(cycles, I_ox_arr[:,I_ox_col], color='r',marker=markers[I_ox_col])
+    #         for V_red_col in range(V_red_cols):
+    #             ax_V_red.plot(cycles, V_red_arr[:,V_red_col], color='b',marker=markers[V_red_col])
+    #         for I_red_col in range(I_red_cols):
+    #             ax_I_red.plot(cycles, I_red_arr[:,I_red_col], color='r',marker=markers[I_red_col])
+    #         figtitle = 'batch_' + title + '_n='+ str(samplen)
+
+    #     plt.suptitle(figtitle)
+
+    #     if save:
+    #         plt.savefig(figtitle + '.eps', format='eps')
+
+    #     plt.show()

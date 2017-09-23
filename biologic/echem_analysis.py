@@ -62,7 +62,7 @@ class CV:
             self.cycles[int(float(row[cycleidx]))]['current'].append(float(row[currentidx]))
 
     def plot_current_voltage(self, cycle_index=list(range(2,11)), 
-        title=None, ylim=None, show=False, save=False, imageformat='png'):
+        title=None, ylim=None, show=False, save=False, savename=None, imagetype='png'):
         ''' Plots current vs voltage for one or all cycles '''
 
         font = {'family': 'Arial', 'size': 16}
@@ -107,9 +107,12 @@ class CV:
             plt.show()
 
         if save:
-            plt.savefig('parts_' + str(self.title) + '.' + str(imagetype))
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('parts_' + self.title + '.' + imagetype)
 
-        plt.close()
+        plt.close(fig)
 
 class CV_batch:
     ''' Method for batch processing data from Biologic
