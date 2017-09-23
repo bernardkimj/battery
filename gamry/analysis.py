@@ -761,7 +761,6 @@ class CV_batch:
 
         plt.close(fig)
 
-
 class CV_extrema_plot:
     ''' Method for plotting exported extrema data 
         Plots individual peak coordinates on same I-V curve '''
@@ -793,91 +792,108 @@ class CV_extrema_plot:
             for header in headers:
                 idxs.append(rows[0].index(header))
 
-            # Robustness to be order-agnostic within csv
+            # Robustness to be column order-agnostic within csv
             cycleidx = idxs[0]
             Epaidx, Ipaidx = idxs[1], idxs[2]
             Epcidx, Ipcidx = idxs[3], idxs[4]
 
-            # Ensuring cycle numbers are sorted
-            cyclenumbers = [int(row[cycleidx]) for row in rows[1:]]
-            cyclenumbers.sort()
+            # # Ensuring cycle numbers are sorted
+            # cyclenumbers = [int(row[cycleidx]) for row in rows[1:]]
+            # cyclenumbers.sort()
 
-            cycles = {}
-            for cyclenumber in cyclenumbers:
-                cycles[cyclenumber] = {
-                    'Epa': [],
-                    'Ipa': [],
-                    'Epc': [],
-                    'Ipc': [],
-                }
+            cycles, Epa, Ipa, Epc, Ipc = [], [], [], [], []
 
+            ### Iterate over rows to get each column as separate list
             for row in rows[1:]:
-                cycles[int(row[cycleidx])]['Epa'].append(float(row[Epaidx]))
-                cycles[int(row[cycleidx])]['Ipa'].append(float(row[Ipaidx]))
-                cycles[int(row[cycleidx])]['Epc'].append(float(row[Epcidx]))
-                cycles[int(row[cycleidx])]['Ipc'].append(float(row[Ipcidx]))
+                cycles.append(row[cycleidx])
+                Epa.append(row[Epaidx])
+                Ipa.append(row[Ipaidx])
+                Epc.append(row[Epcidx])
+                Ipc.append(row[Ipcidx])
 
-            self.alldata[int(sample)] = cycles
+            self.alldata[int(sample)] = {
+                'cycles': cycles,
+                'Epa': Epa,
+                'Ipa': Ipa,
+                'Epc': Epc,
+                'Ipc': Ipc,
+            }
+
+            # cycles = {}
+            # for cyclenumber in cyclenumbers:
+            #     cycles[cyclenumber] = {
+            #         'Epa': [],
+            #         'Ipa': [],
+            #         'Epc': [],
+            #         'Ipc': [],
+            #     }
+
+            # for row in rows[1:]:
+            #     cycles[int(row[cycleidx])]['Epa'].append(float(row[Epaidx]))
+            #     cycles[int(row[cycleidx])]['Ipa'].append(float(row[Ipaidx]))
+            #     cycles[int(row[cycleidx])]['Epc'].append(float(row[Epcidx]))
+            #     cycles[int(row[cycleidx])]['Ipc'].append(float(row[Ipcidx]))
+
+            # self.alldata[int(sample)] = cycles
 
     def plot_extrema(self, xlim=None, ylim=None, title=None,
         show=False, save=False, savename=None, imagetype='png'):
         ''' Plots extrema points from CV on i-v plot
-            Samples are plotted as series of points for each cycle '''
+            Samples are plotted as lines for each cycle '''
 
-        maxlen = 0
-        for sample in self.alldata:
-            if len(self.alldata[sample]) > maxlen:
-                maxlen = len(self.alldata[sample])
-
-        # Based on maximum number of cycles for all samples
-        coloridx = np.linspace(0.4, 1, maxlen)
-
-        cmapmaster = {
-            0: [plt.cm.Greys(idx) for idx in coloridx],
-            1: [plt.cm.Purples(idx) for idx in coloridx],
-            2: [plt.cm.Blues(idx) for idx in coloridx],
-            3: [plt.cm.Greens(idx) for idx in coloridx],
-            4: [plt.cm.Oranges(idx) for idx in coloridx],
-            5: [plt.cm.Reds(idx) for idx in coloridx],
-            6: [plt.cm.spring(idx) for idx in coloridx],
-            7: [plt.cm.cool(idx) for idx in coloridx],
-        }
-
-        # markermaster = ['o', 's', '^', '*', 'x', 'D', '+', '_']
+        colors = [plt.cm.viridis(idx) for idx in np.linspace(0.1,1,8)]
+        # colors = [plt.cm.plasma(idx) for idx in np.linspace(0,1,len(self.alldata))]
 
         font = {'family': 'Arial', 'size': 28}
         matplotlib.rc('font', **font)
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
-        marker, markersize, markeredgecolor = '.', 25, 'k'
 
-        for cmidx, sample in enumerate(sorted(list(self.alldata.keys()))):
-            for idx, cycle in enumerate(sorted(list(self.alldata[sample].keys()))):
-                if cycle == max(list(self.alldata[sample].keys())):
-                    ax.plot(self.alldata[sample][cycle]['Epa'], self.alldata[sample][cycle]['Ipa'], 
-                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
-                        marker=marker, markersize=markersize,
-                        label='S'+str(sample))
-                    ax.plot(self.alldata[sample][cycle]['Epc'], self.alldata[sample][cycle]['Ipc'], 
-                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
-                        marker=marker, markersize=markersize,)
-                else:
-                    ax.plot(self.alldata[sample][cycle]['Epa'], self.alldata[sample][cycle]['Ipa'], 
-                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
-                        marker=marker, markersize=markersize,)
-                    ax.plot(self.alldata[sample][cycle]['Epc'], self.alldata[sample][cycle]['Ipc'], 
-                        color=cmapmaster[cmidx][idx], markeredgecolor=markeredgecolor,
-                        marker=marker, markersize=markersize,)
+        marker = '.'
+        markersize = 25
+        markeredgecolor = 'k'
+        markercolorfirst = 'w'
+        markercolorlast = 'k'
+
+        for sample in sorted(list(self.alldata.keys())):
+            ax.plot(self.alldata[sample]['Epa'], self.alldata[sample]['Ipa'],
+                color=colors[sample-1], linewidth=4, label='S'+str(sample),)
+            ax.plot(self.alldata[sample]['Epc'], self.alldata[sample]['Ipc'],
+                color=colors[sample-1], linewidth=4,)
+
+            # ax.plot(self.alldata[sample]['Epa'], self.alldata[sample]['Ipa'],
+            #     color=colors[coloridx], linewidth=4, label='S'+str(sample),)
+            # ax.plot(self.alldata[sample]['Epc'], self.alldata[sample]['Ipc'],
+            #     color=colors[coloridx], linewidth=4,)
+
+            ax.plot([self.alldata[sample]['Epa'][0]], [self.alldata[sample]['Ipa'][0]],
+                color=markercolorfirst, 
+                marker=marker, markersize=markersize, markeredgecolor=markeredgecolor)
+            ax.plot([self.alldata[sample]['Epa'][-1]], [self.alldata[sample]['Ipa'][-1]],
+                color=markercolorlast, 
+                marker=marker, markersize=markersize, markeredgecolor=markeredgecolor)
+            ax.plot([self.alldata[sample]['Epc'][0]], [self.alldata[sample]['Ipc'][0]],
+                color=markercolorfirst,
+                marker=marker, markersize=markersize, markeredgecolor=markeredgecolor)
+            ax.plot([self.alldata[sample]['Epc'][-1]], [self.alldata[sample]['Ipc'][-1]],
+                color=markercolorlast, 
+                marker=marker, markersize=markersize, markeredgecolor=markeredgecolor)
+
+        ax.plot([4], [0], color=markercolorfirst, linewidth=0, 
+                marker=marker, markersize=markersize, markeredgecolor=markeredgecolor,
+                label='First Cycle')
+        ax.plot([4], [0], color=markercolorlast, linewidth=0, 
+                marker=marker, markersize=markersize, markeredgecolor=markeredgecolor,
+                label='Last Cycle')
 
         ax.set_xlabel('Potential [V]')
         ax.set_ylabel('Current [mA]')
-        ax.legend()
+        ax.legend(fontsize=24)
         ax.grid()
 
         if xlim:
             ax.set_xlim(xlim)
         else:
             ax.set_xlim([-2,2])
-
 
         if ylim:
             ax.set_ylim(ylim)
