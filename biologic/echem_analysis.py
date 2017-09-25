@@ -5,6 +5,7 @@
     Principal Investigators: Paul Wright, James Evans
     Institution: University of California, Berkeley '''
 
+from battery.utilities import utilities
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -257,10 +258,9 @@ class PEIS:
         ''' Determines scaling factor for impedance values
             Default value is in Ohms, scales values to kOhms or MOhms '''
 
-        zscaledict = {'k': 1e3, 'M': 1e6}
+        zscaledict = {None: 1e0, 'k': 1e3, 'M': 1e6}
 
         return zscaledict[zscale]
-
 
     def find_r_solution(self):
         ''' Calculated solution resistance by taking value of real impedance
@@ -350,8 +350,8 @@ class PEIS:
         plt.close(fig)
 
 class PEIS_batch:
-    ''' Batch processes potentiostatic EIS data from Biologic tester
-        Plots samples measurements from same batch on same axes 
+    ''' Processes potentiostatic EIS data from Biologic tester
+        Plots samples measurements FROM SAME SAMPLE on same axes 
         For Nyquist and Bode plots 
 
         Uses defined methods in PEIS class '''
@@ -361,25 +361,20 @@ class PEIS_batch:
         self.allcycles = {}
 
         self.zscalestr = zscale
-        self.zscaleval = self.get_zscale(zscale=zscale)
+        self.zscaleval = PEIS.get_zscale(self, zscale=zscale)
 
         for file in alldata:
             exported = PEIS(file, zscale=self.zscalestr)
 
             match = re.search(r'_\d{2}_', file)
-            stepidx = (int(match.group(0)[1:3])-1)/2
+            stepidx = (int(match.group(0)[1:3])-1)/2 * 10
             self.allcycles[stepidx] = exported
 
         titlematch = re.search(r'CELL_.*_\d{2}_', alldata[0])
         self.title = titlematch.group(0)[:-4]
 
-    def get_zscale(self, zscale):
-        ''' Determines scaling factor for impedance values
-            Default value is in Ohms, scales values to kOhms or MOhms '''
-
-        zscaledict = {'k': 1e3, 'M': 1e6}
-
-        return zscaledict[zscale]
+        samplesearch = re.search(r'_S\d{1,2}_', alldata[0])
+        self.samplenum = int(samplesearch.group(0)[2:-1])
 
     def plot_nyquist(self, xlim=None, ylim=None, title=None, 
         show=False, save=False, imagetype='png'):
@@ -395,7 +390,7 @@ class PEIS_batch:
         for sample in sorted(self.allcycles):
             ax.plot(self.allcycles[sample].real, self.allcycles[sample].imag,
                 color=plt.cm.Blues(coloridx[int(sample)]), linewidth=2,
-                label='Cycle '+str(int(sample*10))+', '+r'$R_{solution}$'+\
+                label='Cycle '+str(int(sample))+', '+r'$R_{solution}$'+\
                     ' = '+'%.2f'%self.allcycles[sample].r_solution + ' Ω')
 
         if xlim:
@@ -436,10 +431,10 @@ class PEIS_batch:
         for sample in sorted(self.allcycles):
             ax_magn.semilogx(self.allcycles[sample].freq, self.allcycles[sample].magn,
                 color=plt.cm.Blues(coloridx[int(sample)]), linewidth=2,
-                label='Cycle '+str(int(sample*10)))
+                label='Cycle '+str(int(sample)))
             ax_phase.semilogx(self.allcycles[sample].freq, self.allcycles[sample].phase,
                 color=plt.cm.Blues(coloridx[int(sample)]), linewidth=2,
-                label='Cycle '+str(int(sample*10)))
+                label='Cycle '+str(int(sample)))
 
         if xlim:
             ax_phase.set_xlim(xlim)
@@ -465,23 +460,173 @@ class PEIS_batch:
 
         plt.close(fig)
 
+    def plot_r_solution(self, xlim=None, ylim=None, title=None,
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots solution resistance vs. cycle number '''
 
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
+        cycles, r_solution = [], []
 
+        for sample in sorted(self.allcycles):
+            cycles.append(sample)
+            r_solution.append(self.allcycles[sample].r_solution)
 
+        ax.plot(cycles, r_solution, color='b', linewidth=3,
+            label='S' + str(self.samplenum))
 
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
 
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
 
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel(r'$R_{solution}$' + ' [Ω]')
+        ax.grid()
+        ax.legend()
 
+        if show:
+            plt.show()
 
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_' + self.title + '_Rsol' + '.' + imagetype)
 
+        plt.close(fig)
 
+class PEIS_batch_sample:
+    ''' Plots PEIS data for multiple samples on single plot
+        e.g. samples S1-4, cycles 0-50 for all samples
+        Requires averaged or summarized-type data points from PEIS or PEIS_batch '''
 
+    def __init__(self, filegroups):
+        ''' Processes and organizes data for plotting '''
 
+        self.alldata = {}
 
+        titlesearch = re.search(r'CELL.*_S\d{1}', filegroups[0][0])
+        self.title = titlesearch.group(0)[:-3]
 
+        for filegroup in filegroups:
+            sampledata = PEIS_batch(filegroup)
+            self.alldata[sampledata.samplenum] = sampledata
 
+        self.r_sol_data = {}
 
+        for sample in sorted(self.alldata):
+            cycles, r_solution = [], []
+
+            for cycle in list(sorted(self.alldata[sample].allcycles.keys())):
+                cycles.append(cycle)
+                r_solution.append(self.alldata[sample].allcycles[cycle].r_solution)
+
+            self.r_sol_data[sample] = {'cycles': cycles, 'r_solution': r_solution}
+
+    def plot_r_solution_discrete(self, xlim=None, ylim=None, title=None,
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots R_solution vs cycle life for multiple samples
+            Separate curves showing how R_solution changes with cycle number for each sample '''
+
+        coloridx = np.linspace(0.4, 1, len(self.r_sol_data))
+
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        for idx, sample in enumerate(sorted(list(self.r_sol_data.keys()))):
+            ax.plot(self.r_sol_data[sample]['cycles'], self.r_sol_data[sample]['r_solution'], 
+                color=plt.cm.Blues(coloridx[idx]), linewidth=3,
+                label='S' + str(sample))
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel(r'$R_{solution}$' + ' [Ω]')
+        ax.grid()
+        ax.legend()
+
+        if show:
+            plt.show()
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_sample_' + self.title + '_Rsol' + '.' + imagetype)
+
+        plt.close(fig)
+
+    def plot_r_solution_average(self, confidence=0.95, xlim=None, ylim=None, title=None,
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots R_solution vs cycle life for multiple samples
+            Includes confidence interval or standard deviation '''
+
+        data = [(self.r_sol_data[sample]['cycles'], self.r_sol_data[sample]['r_solution']) \
+            for sample in sorted(list(self.r_sol_data.keys()))]
+
+        cycles, mean, std, lcl, ucl = utilities.batch_average_plot(data, confidence=confidence)
+
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        for sample in data:
+            ax.plot(sample[0], sample[1], color='b', linewidth=3, alpha=0.2)
+        ax.plot(cycles, mean, color='b', linewidth=3)
+
+        if confidence:
+            ax.plot(cycles, lcl, color='b', linestyle='--', linewidth=2, 
+                label=str(confidence)[2:]+'% Confidence Interval (t-test)')
+            ax.plot(cycles, ucl, color='b', linestyle='--', linewidth=2)
+            ax.fill_between(cycles, ucl, lcl, color='b', alpha=0.2)
+        else:
+            ax.plot(cycles, mean+std, color='b', linestyle='--', linewidth=2, 
+                label='±1 '+r'$\sigma$')
+            ax.plot(cycles, mean-std, color='b', linestyle='--', linewidth=2)
+            ax.fill_between(cycles, mean+std, mean-std, color='b', alpha=0.2)
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel(r'$R_{solution}$' + ' [Ω]')
+        ax.grid()
+        ax.legend()
+
+        if show:
+            plt.show()
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_sample_' + self.title + '_Rsol' + '.' + imagetype)
+
+        plt.close(fig)
 
 
 

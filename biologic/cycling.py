@@ -599,7 +599,6 @@ class GCPL5_batch:
 
         plt.close(fig)
 
-
     def plot_DCIR_average(self, confidence=0.95, xlim=None, ylim=None, title=None, 
         show=False, save=False, savename=None, imagetype='png'):
         ''' Plots average DCIR vs cycle number
