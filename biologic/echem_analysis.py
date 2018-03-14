@@ -191,13 +191,13 @@ class CV_batch:
 class PEIS:
     ''' Processes potentiostatic EIS data from Biologic tester '''
 
-    def __init__(self, filename=None, thickness=0.001, area=1, zscale='k'):
+    def __init__(self, filename=None, thickness=0.0365, area=1, zscale='k'):
         ''' Opens file and retrieves data.
 
         Retrieves frequency, real impedance, imaginary impedance, 
         impedance magnitude, phase angle, time, voltage, and current
 
-        *** NOTE *** Assumsed imaginary impedance is given as positive values
+        *** NOTE *** Assumes imaginary impedance is given as positive values
 
         Unit requirements:
             R_solution [ohm]
@@ -209,8 +209,7 @@ class PEIS:
         self.thickness = thickness
         self.area = area
 
-        self.zscalestr = zscale
-        self.zscaleval = self.get_zscale(zscale)
+        self.zscalestr, self.zscaleval = self.get_zscale(zscale)
 
         titlesearch = re.search(r'CELL_.*PEIS', self.filename)
         self.title = titlesearch.group(0)
@@ -252,15 +251,28 @@ class PEIS:
         self.magn = [magnraw/self.zscaleval for magnraw in self.magnraw]
 
         self.find_r_solution()
-        self.conductivity = (self.thickness * 1000) / (self.area * self.r_solution)
+        self.conductivity = (self.thickness * 1000) / (self.area * self.r_solution) #mS/cm
 
     def get_zscale(self, zscale):
         ''' Determines scaling factor for impedance values
             Default value is in Ohms, scales values to kOhms or MOhms '''
 
-        zscaledict = {None: 1e0, 'k': 1e3, 'M': 1e6}
+        zscaledict = {
+            None: {
+                'zscalestr': 'Ω', 
+                'zscaleval': 1e0,
+            },
+            'k': {
+                'zscalestr': 'kΩ', 
+                'zscaleval': 1e3,
+            },
+            'M': {
+                'zscalestr': 'MΩ', 
+                'zscaleval': 1e6,
+            },
+        }
 
-        return zscaledict[zscale]
+        return zscaledict[zscale]['zscalestr'], zscaledict[zscale]['zscaleval']
 
     def find_r_solution(self):
         ''' Calculated solution resistance by taking value of real impedance
@@ -297,8 +309,8 @@ class PEIS:
             ax.set_title(self.title)
 
         ax.set_aspect('equal', 'datalim')
-        ax.set_xlabel(r'$Z_{real}$' + ' [' + self.zscalestr + 'Ω]')
-        ax.set_ylabel(r'$Z_{imag}$' + ' [' + self.zscalestr + 'Ω]')
+        ax.set_xlabel(r'$Z_{real}$' + ' [' + self.zscalestr + ']')
+        ax.set_ylabel(r'$-Z_{imag}$' + ' [' + self.zscalestr + ']')
         ax.legend()
         ax.grid()
 
@@ -320,7 +332,7 @@ class PEIS:
 
         fig, (ax_magn, ax_phase) = plt.subplots(2, sharex=True, figsize=(16,9), dpi=75)
 
-        ax_magn.semilogx(self.freq, self.magn,
+        ax_magn.loglog(self.freq, self.magn,
             color='b', linewidth=2)
         ax_phase.semilogx(self.freq, self.phase,
             color='b', linewidth=2)
@@ -335,7 +347,7 @@ class PEIS:
         else:
             ax_magn.set_title(self.title)
 
-        ax_magn.set_ylabel('Magnitude' + ' [' + self.zscalestr + 'Ω]')
+        ax_magn.set_ylabel('Magnitude' + ' [' + self.zscalestr + ']')
         ax_phase.set_ylabel('Phase [°]')
         ax_phase.set_xlabel('Frequency [Hz]')
         ax_magn.grid()
@@ -360,14 +372,13 @@ class PEIS_batch:
         # Accepts lists of class CV
         self.allcycles = {}
 
-        self.zscalestr = zscale
-        self.zscaleval = PEIS.get_zscale(self, zscale=zscale)
+        self.zscalestr, self.zscaleval = PEIS.get_zscale(self, zscale=zscale)
 
         for file in alldata:
-            exported = PEIS(file, zscale=self.zscalestr)
+            exported = PEIS(file, zscale=zscale)
 
             match = re.search(r'_\d{2}_', file)
-            stepidx = (int(match.group(0)[1:3])-1)/2 * 10
+            stepidx = (int(match.group(0)[1:3])-1)/2
             self.allcycles[stepidx] = exported
 
         titlematch = re.search(r'CELL_.*_\d{2}_', alldata[0])
@@ -385,12 +396,12 @@ class PEIS_batch:
 
         coloridx = np.linspace(0.3,1,len(self.allcycles)) # for Blues colormap
 
-        fig, ax = plt.subplots(figsize=(12,9), dpi=75)
+        fig, ax = plt.subplots(figsize=(9,9), dpi=75)
 
         for sample in sorted(self.allcycles):
             ax.plot(self.allcycles[sample].real, self.allcycles[sample].imag,
                 color=plt.cm.Blues(coloridx[int(sample)]), linewidth=2,
-                label='Cycle '+str(int(sample))+', '+r'$R_{solution}$'+\
+                label='Cycle '+str(int(sample)*10)+', '+r'$R_{solution}$'+\
                     ' = '+'%.2f'%self.allcycles[sample].r_solution + ' Ω')
 
         if xlim:
@@ -404,8 +415,8 @@ class PEIS_batch:
             ax.set_title(self.title)
 
         ax.set_aspect('equal', 'datalim')
-        ax.set_xlabel(r'$Z_{real}$' + ' [' + self.zscalestr + 'Ω]')
-        ax.set_ylabel(r'$Z_{imag}$' + ' [' + self.zscalestr + 'Ω]')
+        ax.set_xlabel(r'$Z_{real}$' + ' [' + self.zscalestr + ']')
+        ax.set_ylabel(r'$-Z_{imag}$' + ' [' + self.zscalestr + ']')
         ax.legend()
         ax.grid()
 
@@ -429,11 +440,11 @@ class PEIS_batch:
         fig, (ax_magn, ax_phase) = plt.subplots(2, sharex=True, figsize=(16,9), dpi=75)
 
         for sample in sorted(self.allcycles):
-            ax_magn.semilogx(self.allcycles[sample].freq, self.allcycles[sample].magn,
-                color=plt.cm.Blues(coloridx[int(sample)]), linewidth=2,
+            ax_magn.loglog(self.allcycles[sample].freq, self.allcycles[sample].magn,
+                color=plt.cm.Blues(coloridx[int(sample)*10]), linewidth=2,
                 label='Cycle '+str(int(sample)))
             ax_phase.semilogx(self.allcycles[sample].freq, self.allcycles[sample].phase,
-                color=plt.cm.Blues(coloridx[int(sample)]), linewidth=2,
+                color=plt.cm.Blues(coloridx[int(sample)*10]), linewidth=2,
                 label='Cycle '+str(int(sample)))
 
         if xlim:
@@ -446,7 +457,7 @@ class PEIS_batch:
         else:
             ax_magn.set_title(self.title)
 
-        ax_magn.set_ylabel('Magnitude' + ' [' + self.zscalestr + 'Ω]')
+        ax_magn.set_ylabel('Magnitude' + ' [' + self.zscalestr + ']')
         ax_phase.set_ylabel('Phase [°]')
         ax_phase.set_xlabel('Frequency [Hz]')
         ax_magn.grid()
@@ -471,7 +482,7 @@ class PEIS_batch:
         cycles, r_solution = [], []
 
         for sample in sorted(self.allcycles):
-            cycles.append(sample)
+            cycles.append(sample*10)
             r_solution.append(self.allcycles[sample].r_solution)
 
         ax.plot(cycles, r_solution, color='b', linewidth=3,
@@ -526,7 +537,7 @@ class PEIS_batch_sample:
             cycles, r_solution = [], []
 
             for cycle in list(sorted(self.alldata[sample].allcycles.keys())):
-                cycles.append(cycle)
+                cycles.append(cycle*10)
                 r_solution.append(self.alldata[sample].allcycles[cycle].r_solution)
 
             self.r_sol_data[sample] = {'cycles': cycles, 'r_solution': r_solution}
@@ -569,7 +580,7 @@ class PEIS_batch_sample:
             if savename:
                 plt.savefig(savename + '.' + imagetype)
             else:
-                plt.savefig('batch_sample_' + self.title + '_Rsol' + '.' + imagetype)
+                plt.savefig('batch_sample_' + self.title + '_Rsol_discrete' + '.' + imagetype)
 
         plt.close(fig)
 
@@ -587,8 +598,8 @@ class PEIS_batch_sample:
         matplotlib.rc('font', **font)
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
-        for sample in data:
-            ax.plot(sample[0], sample[1], color='b', linewidth=3, alpha=0.2)
+        # for sample in data:
+        #     ax.plot(sample[0], sample[1], color='b', linewidth=3, alpha=0.2)
         ax.plot(cycles, mean, color='b', linewidth=3)
 
         if confidence:
@@ -624,9 +635,11 @@ class PEIS_batch_sample:
             if savename:
                 plt.savefig(savename + '.' + imagetype)
             else:
-                plt.savefig('batch_sample_' + self.title + '_Rsol' + '.' + imagetype)
+                plt.savefig('batch_sample_' + self.title + '_Rsol_average' + '.' + imagetype)
 
         plt.close(fig)
+
+        return ax
 
 
 

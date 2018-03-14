@@ -22,7 +22,7 @@ class utilities:
         ''' Shortens x and y vectors to length of shortest vector in group
             Returns point-by-point y-mean, std, lcl, ucl, calculated using t-dist
                 instead of z-dist (for small samples)
-            Data is list of tuples (x,y)
+            Data is list of tuples of lists (x,y)
             Number of x and y vectors must be equal! '''
 
         # Separates x and y vectors into two different objects
@@ -43,7 +43,7 @@ class utilities:
                 for num in range(numnan):
                     sample.append(np.nan)
 
-        cycles = np.array([np.mean(row) for row in np.array(x).T])
+        indep = np.array([np.mean(row) for row in np.array(x).T])
 
         dataarray = np.array(y).T
         mean = np.array([np.mean(row) for row in dataarray])
@@ -57,4 +57,24 @@ class utilities:
                 lcl.append(R[0])
                 ucl.append(R[1])
 
-        return cycles, mean, std, lcl, ucl
+        return indep, mean, std, lcl, ucl
+
+    # def figure_formatting(xlim=xlim, ylim=ylim, title=title, 
+    #     show=show, save=save, savename=savename, imagetype=imagetype):
+
+    #     font = {'family': 'Arial', 'size': 28}
+    #     matplotlib.rc('font', **font)
+    #     fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+    #     if xlim:
+    #         ax.set_xlim(xlim)
+    #     if ylim:
+    #         ax.set_ylim(ylim)
+
+    #     if title:
+    #         ax.set_title(title)
+    #     else:
+    #         ax.set_title()
+
+
+

@@ -6,6 +6,7 @@ Principal Investigators: Prof. Paul Wright, Prof. James Evans
 University: University of California, Berkeley
 '''
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -43,29 +44,53 @@ class xrd:
         self.smoothed = {}
         self.smoothed['angle'] = self.scan['angle'][int(np.floor(window_size/2-1)):-int(np.ceil(window_size/2))]
         self.smoothed['intensity'] = self.moving_average(raw_intensity, window_size)
+        self.title = filename[:-4]
 
-    def plotter(self, title=None, save=False, smoothed=False):
+    def plotter(self, ylim=None, title=None, smoothed=False,
+        show=False, save=False, savename=None, imagetype='png'):
 
         ''' Plots XRD data
         Assumes input is two lists as defined by self.scan in rigaku_process
         '''
 
-        plt.plot(self.scan['angle'], self.scan['intensity'],
-                 marker='.', markersize=5,
-                 color='b')
-        if smoothed:
-            plt.plot(self.smoothed['angle'], self.smoothed['intensity'],
-                     color='r')
+        # Plotting formatting
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
 
-        plt.xlabel(r'$2\theta$')
-        plt.ylabel('Intensity')
-        plt.title(str(title[:-4]))
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        ax.plot(self.scan['angle'], self.scan['intensity'],
+                 marker='.', markersize=5,
+                 color='b', label='raw')
+        if smoothed:
+            ax.plot(self.smoothed['angle'], self.smoothed['intensity'],
+                     color='r', label='smoothed')
+            ax.legend()
+
+        ax.set_xlim([0,90])
+
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        ax.set_xlabel(r'$2\theta$')
+        ax.set_ylabel('Intensity')
+        ax.grid()
+
+        if show:
+            plt.show()
 
         if save:
-            plt.savefig('export_' + title[:-4] + '.eps', format='eps')
-            plt.clf()
-        else:
-            plt.show()
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig(self.title + '.' + imagetype)
+
+        plt.close(fig)
 
     def moving_average(self, interval, window_size):
         ''' Calculates moving average to smooth noise from data 

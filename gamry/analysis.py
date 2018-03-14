@@ -25,7 +25,7 @@ class EIS:
 
     '''
 
-    def __init__(self, filename=None, thickness=0.001, area=1):
+    def __init__(self, filename=None, thickness=0.0365, area=1, zscale='k'):
         ''' Opens file and retrieves data.
 
         Retrieves time, frequency, real impedance, imaginary impedance,
@@ -38,19 +38,21 @@ class EIS:
             Area [cm^2]
         '''
 
-        self.time = []
-        self.freq = []
-        self.real = []
-        self.imag = []
-        self.phaz = []
-        self.magn = []
-
-        self.r_solution = None
-        self.conductivity = None
-
         self.filename = filename
         self.thickness = thickness
         self.area = area
+
+        self.zscalestr, self.zscaleval = self.get_zscale(zscale)
+
+        titlesearch = re.search(r'EXDTA_.*_S\d{1,2}', self.filename)
+        self.title = titlesearch.group(0)[6:]
+
+        self.time = []
+        self.freq = []
+        self.realraw = []
+        self.imagraw = []
+        self.phase = []
+        self.magnraw = []
 
         with open(filename, errors='replace') as f:
             rows = f.readlines()
@@ -66,78 +68,19 @@ class EIS:
                         if (self.is_num(row[0]) and switch and index > switch):
                             self.time.append(float(row[1]))
                             self.freq.append(float(row[2]))
-                            self.real.append(float(row[3]))
-                            self.imag.append(float(row[4]))
-                            self.magn.append(float(row[6]))
-                            self.phaz.append(float(row[7]))
+                            self.realraw.append(float(row[3]))
+                            self.imagraw.append(float(row[4]))
+                            self.magnraw.append(float(row[6]))
+                            self.phase.append(float(row[7]))
                 except Exception:
                     raise
 
-            try:
-                self.calculate_conductivity()
-            except Exception:
-                raise
+        self.real = [realraw/self.zscaleval for realraw in self.realraw]
+        self.imag = [-1*imagraw/self.zscaleval for imagraw in self.imagraw]
+        self.magn = [magnraw/self.zscaleval for magnraw in self.magnraw]
 
-    def calculate_conductivity(self):
-        try:
-            max_imag_index = self.imag.index(max(self.imag))
-            self.r_solution = self.real[max_imag_index]
-            self.conductivity = (
-                (self.thickness * 1000) / (self.area * self.r_solution))
-        except Exception:
-            raise
-
-    def list_metrics(self):
-        print('File: ' + self.filename)
-        print('R_solution: ' + str(self.r_solution) + ' ohm')
-        print('Thickness: ' + str(self.thickness) + ' cm')
-        print('Area: ' + str(self.area) + ' cm^2')
-        print('Conductivity: ' + str(self.conductivity) + ' mS/cm')
-        print('--')
-
-    def plot_nyquist(self, log_plot=False, ylim=None, save=False):
-        ''' Plots real impedance vs negative imaginary impedance '''
-
-        self.calculate_conductivity()
-        conductivity_string = "{0:.3f}".format(self.conductivity)
-
-        if log_plot:
-            plt.loglog(self.real, [-1 * v for v in self.imag],
-                       marker='.', markersize=15)
-        else:
-            plt.plot(self.real, [-1 * v for v in self.imag],
-                     marker='.', markersize=15)
-
-        if ylim:
-            plt.ylim(ylim[0], ylim[1])
-
-        plt.xlabel('Z_real (ohm)')
-        plt.ylabel('(-) Z_imag (ohm)')
-
-        if save:
-            plt.savefig(self.filename + '_nyquist.pdf')
-        else:
-            plt.title('Nyquist Plot - ' +
-                      conductivity_string + ' mS/cm - ' + self.filename)
-            plt.show()
-
-    def plot_bode(self, save=False):
-
-        fig, (ax_magn, ax_phaz) = plt.subplots(2, sharex=True)
-        ax_magn.semilogx(self.freq, self.magn)
-        ax_phaz.semilogx(self.freq, self.phaz)
-
-        ax_magn.set_ylabel('Magnitude [Ω]')
-        ax_phaz.set_ylabel('Phase [°]')
-        ax_phaz.set_xlabel('Frequency')
-
-        if save:
-            plt.savefig(self.filename + '_bode.pdf')
-
-        plt.show()
-
-
-
+        self.find_r_solution()
+        self.conductivity = (self.thickness * 1000) / (self.area * self.r_solution)
 
     def is_num(self, s):
         try:
@@ -145,6 +88,116 @@ class EIS:
             return True
         except ValueError:
             return False
+
+    def get_zscale(self, zscale):
+        ''' Determines scaling factor for impedance values
+            Default value is in Ohms, scales values to kOhms or MOhms '''
+
+        zscaledict = {
+            None: {
+                'zscalestr': 'Ω', 
+                'zscaleval': 1e0,
+            },
+            'k': {
+                'zscalestr': 'kΩ', 
+                'zscaleval': 1e3,
+            },
+            'M': {
+                'zscalestr': 'MΩ', 
+                'zscaleval': 1e6,
+            },
+        }
+
+        return zscaledict[zscale]['zscalestr'], zscaledict[zscale]['zscaleval']
+
+    def find_r_solution(self):
+        ''' Calculated solution resistance by taking value of real impedance
+            closest to real axis intercept '''
+
+        min_imag_val = min(abs(imag) for imag in self.imagraw[:10])
+        min_imag_idx = [abs(imag) for imag in self.imagraw].index(min_imag_val)
+
+        self.r_solution = self.realraw[min_imag_idx]
+
+    def plot_nyquist(self, xlim=None, ylim=None, title=None, 
+        show=False, save=False, imagetype='png', savename=None):
+        ''' Plots imaginary vs. real impedance 
+            Imaginary and real axes locked to same scale by default '''
+
+        font = {'family': 'Arial', 'size': 16}
+        matplotlib.rc('font', **font)
+
+        fig, ax = plt.subplots(figsize=(12,9), dpi=75)
+
+        ax.plot(self.real, self.imag, color='b', linewidth=2,
+            label=r'$R_{solution}$' + ' = ' + '%.2f'%self.r_solution + ' Ω' + '\n' + 
+                r'$\sigma$' + ' = ' + '%0.2f'%self.conductivity + ' S')
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        ax.set_aspect('equal', 'datalim')
+        ax.set_xlabel(r'$Z_{real}$' + ' [' + self.zscalestr + ']')
+        ax.set_ylabel(r'$-Z_{imag}$' + ' [' + self.zscalestr + ']')
+        ax.legend()
+        ax.grid()
+
+        if show:
+            plt.show()
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig(self.title + '_nyquist' + '.' + imagetype)
+
+        plt.close(fig)
+
+    def plot_bode(self, xlim=None, ylim=None, title=None, 
+        show=False, save=False, imagetype='png'):
+        ''' Plots imaginary vs. real impedance 
+            Imaginary and real axes locked to same scale by default '''
+
+        font = {'family': 'Arial', 'size': 16}
+        matplotlib.rc('font', **font)
+
+        fig, (ax_magn, ax_phase) = plt.subplots(2, sharex=True, figsize=(16,9), dpi=75)
+
+        ax_magn.loglog(self.freq, self.magn,
+            color='b', linewidth=2)
+        ax_phase.semilogx(self.freq, self.phase,
+            color='b', linewidth=2)
+
+        if xlim:
+            ax_phase.set_xlim(xlim)
+        if ylim:
+            ax_phase.set_ylim(ylim)
+
+        if title:
+            ax_magn.set_title(title)
+        else:
+            ax_magn.set_title(self.title)
+
+        ax_magn.set_ylabel('Magnitude' + ' [' + self.zscalestr + ']')
+        ax_phase.set_ylabel('Phase [°]')
+        ax_phase.set_xlabel('Frequency [Hz]')
+        ax_magn.grid()
+        ax_phase.grid()
+
+        if show:
+            plt.show()
+
+        if save:
+            plt.savefig(self.title + '_bode' + '.' + str(imagetype))
+
+        plt.close(fig)
 
 class CV:
 
@@ -175,7 +228,9 @@ class CV:
                 row = row.split()
                 try:
                     if row:
-                        if row[0][0:5] == 'CURVE' and len(row[0]) > 5:
+                        if row[0][0:4] == 'AREA':
+                            self.area = float(row[2])
+                        elif row[0][0:5] == 'CURVE' and len(row[0]) > 5:
                             curve_number = int(row[0][5::])
                             cyclenumbers.append(curve_number)
                             switch = index + 2
@@ -193,7 +248,7 @@ class CV:
                             # Save data and convert current to mA
                             current_cycle_time.append(float(row[1]))
                             current_cycle_voltage.append(float(row[2]))
-                            current_cycle_current.append(float(row[3]) * 1000)
+                            current_cycle_current.append(float(row[3]) * 1000/self.area)
 
                 except Exception:
                     raise
@@ -253,32 +308,36 @@ class CV:
         return np.convolve(interval, window, 'valid')
 
     def plot_current_voltage(self, cycle_index=0, xlim=None, ylim=None, 
-        title=None, show=False, save=False, imagetype='png'):
+        title=None, show=False, save=False, savename=None, imagetype='png'):
         ''' Plots current vs voltage for one or all cycles '''
 
-        font = {'family': 'Arial', 'size': 16}
+        font = {'family': 'Arial', 'size': 40}
         matplotlib.rc('font', **font)
 
-        coloridx = np.linspace(0.4,1,len(self.cycles)) # for use with Blues cmap
+        # coloridx = np.linspace(0.4,1,len(self.cycles)) # for use with Blues cmap
+        coloridx = np.linspace(0,1,len(self.cycles)) # for use with viridis cmap
 
-        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+        fig, ax = plt.subplots(figsize=(16,10), dpi=75)
 
         if cycle_index:
-            ax.plot(self.cycles[cycle_index]['voltage'],
-                    self.cycles[cycle_index]['current'],
-                    linewidth=2,
-                    color=plt.cm.Blues(coloridx[cycle_index-1]))
+            for cycle in cycle_index:
+                ax.plot(self.cycles[cycle]['voltage'],
+                        self.cycles[cycle]['current'],
+                        linewidth=3,
+                        color=plt.cm.inferno(coloridx[cycle-1]),
+                        label = 'Cycle '+str(cycle))
+            ax.legend()
         else:
             for i in range(1,len(self.cycles)):
                 ax.plot(self.cycles[i]['voltage'],
                         self.cycles[i]['current'],
-                        linewidth=2,
-                        color=plt.cm.Blues(coloridx[i-1]),
+                        linewidth=3,
+                        color=plt.cm.inferno(coloridx[i-1]),
                         label='Cycle '+str(i))
-            ax.legend()
+            ax.legend(fontsize=28)
 
         ax.set_xlabel('Potential [V]')
-        ax.set_ylabel('Current [mA]')
+        ax.set_ylabel('Current [mA/cm$^2$]')
         ax.grid()
 
         if xlim:
@@ -295,7 +354,10 @@ class CV:
             plt.show()
 
         if save:
-            plt.savefig('single_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('single_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
 
         plt.close(fig)
 
@@ -705,38 +767,112 @@ class CV_batch:
     Author: Bernard Kim
     '''
 
-    def __init__(self, alldata):
-        # Accepts lists of class CV
+    def __init__(self, alldata, var):
+        # Accepts list of filenames
         self.allcycles = {}
+        titles = []
 
         for file in alldata:
             exported = CV(file)
-
-            match = re.search(r'S\d{1,2}', file)
-            sampleidx = int(match.group(0)[1:])
+            title, sampleidx = self.title_search_format(filename=file, var=var)
             self.allcycles[sampleidx] = exported.cycles
+            titles.append(title)
 
-        titlesearch = re.search(r'GPE_.*_S\d{1}', alldata[0])
-        self.title = titlesearch.group(0)[:-3]
+        # If all titles are identical, great
+        # Otherwise, throw soft error
+        self.title = titles[0]
+
+        if len(set(titles)) is not 1:
+            print('Titles do not match!!')
+
+    def title_search_format(self, filename, var=None):
+        ''' 
+        Searches filenames depending on experiment data type for batch 
+        processing
+        Returns formatted title with constant sample parameters for 
+        batch plotting and sample idx
+        var can be "IL", "mol", "nu", or "N"
+        '''
+
+        # Searches filename for GPE vs. IL sample type, IL identity, 
+        # concentration, scan rate, and sample number
+        isGPEmatch = re.search(r'GPE', filename)
+        isILmatch = re.search(r'IL', filename)
+        ILmatch = re.search(r'[A-Z]{1}MIM[a-zA-Z\d]{3,4}', filename)
+        molmatch = re.search(r'0,\d{1}M', filename)
+        numatch = re.search(r'\d{2,3}mVs', filename)
+        Nmatch = re.search(r'S\d{1,2}', filename)
+
+        # Determines order of elements in title
+        titlematches = [isGPEmatch, isILmatch, ILmatch, molmatch, numatch]
+
+        # Instantiate title, samplenum, and samplevar as placeholders
+        title = ''
+        samplenum, samplevar = None, None
+
+        # Check if sample number exists and assign if it does
+        if Nmatch:
+            samplenum = Nmatch.group(0)
+
+        # Determine sampleidx whether or not samplenum exists
+        if var == 'N':
+            sampleidx = samplenum
+        else:
+            if var == 'IL':
+                samplevar = ILmatch.group(0)
+                if Nmatch:
+                    sampleidx = samplevar + '_' + samplenum
+                else:
+                    sampleidx = samplevar
+            elif var == 'mol':
+                samplevar = molmatch.group(0)
+                if Nmatch:
+                    sampleidx = samplevar + '_' + samplenum
+                else:
+                    sampleidx = samplevar
+            elif var == 'nu':
+                samplevar = numatch.group(0)
+                if Nmatch:
+                    sampleidx = samplevar[:-3] + ' ' + samplevar[-3:-1] + '/' + samplevar[-1] + samplenum
+                else:
+                    sampleidx = samplevar[:-3] + ' ' + samplevar[-3:-1] + '/' + samplevar[-1]
+            elif var is None:
+                samplevar = None
+                sampleidx = filename
+
+        # Extract samplevar from title and don't add it back into the title
+        # Otherwise, reconstruct the title in the right order, regardless of 
+        # filename order
+        for match in titlematches:
+            if match is not None:
+                if match.group(0) == samplevar:
+                    continue
+                else:
+                    title = title + match.group(0) + '_'
+
+        title = title[:-1]
+
+        return title, sampleidx
 
     def plot_current_voltage(self, cycle_index=0, xlim=None, ylim=None,
-        title=None, show=False, save=False, imagetype='png'):
+        title=None, show=False, save=False, savename=None, imagetype='png'):
         ''' Plots current vs voltage by cycle with all samples on one graph '''
 
-        font = {'family': 'Arial', 'size': 16}
+        font = {'family': 'Arial', 'size': 28}
         matplotlib.rc('font', **font)
 
-        coloridx = np.linspace(0.4,1,len(self.allcycles)) # for use with Blues colormap
+        # coloridx = np.linspace(0.5,1,len(self.allcycles)) # for use with Blues colormap
+        coloridx = np.linspace(0,1,10) # for use with tab10 colormap
 
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
-        for idx, sample in enumerate(sorted(self.allcycles)):
+        for idx, sample in enumerate(self.allcycles):
             if cycle_index:
                 ax.plot(self.allcycles[sample][cycle_index]['voltage'],
                         self.allcycles[sample][cycle_index]['current'],
-                        linewidth=2,
-                        color=plt.cm.Blues(coloridx[int(idx)]),
-                        label='S'+str(sample))
+                        linewidth=3,
+                        color=plt.cm.tab10(coloridx[int(idx)]),
+                        label=str(sample))
 
         ax.legend()
         ax.set_xlabel('Potential [V]')
@@ -753,11 +889,14 @@ class CV_batch:
         else:
             ax.set_title('batch_' + self.title + '_C' + str(cycle_index))
 
+        if save:
+            if savename:
+                fig.savefig(savename + '.' + imagetype)
+            else:
+                fig.savefig('batch_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
+
         if show:
             plt.show()
-
-        if save:
-            plt.savefig('batch_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
 
         plt.close(fig)
 

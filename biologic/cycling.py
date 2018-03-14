@@ -539,6 +539,49 @@ class GCPL5:
 
         plt.close(fig)
 
+    def plot_capacity(self, discharge=True, charge=True, xlim=False, ylim=[0,1], 
+        title=None, show=False, save=False, imagetype='png'):
+        ''' Plots charge/discharge capacity vs cycle '''
+
+        # Plotting formatting
+        font = {'family': 'Arial', 'size': 16}
+        matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        # Get list of all cycle numbers
+        # Omit cycle 0 from plotting
+
+        # Plot both discharge and charge by default
+        if discharge:
+            Qdischarge = [np.max(self.cycles[cycle]['Qdischarge']) for cycle in cycles]
+            ax.plot(cycles[:-1], Qdischarge[:-1], color='b', linewidth=2, label=r'$Q_{discharge}$')
+        if charge:
+            Qcharge = [np.max(self.cycles[cycle]['Qcharge']) for cycle in cycles]
+            ax.plot(cycles, Qcharge, color='r', linewidth=2, label=r'$Q_{charge}$')
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title + '_Capacity')
+
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel('Capacity ' + r'$[mAh/cm^2]$')
+        ax.legend()
+        ax.grid()
+
+        if show:
+            plt.show()
+
+        if save:
+            plt.savefig(self.title + '_Capacity' + '.'+ imagetype)
+
+        plt.close(fig)
+
 class GCPL5_batch:
     ''' Plots batches of samples together
         Uses defined methods from GCPL5 class '''
@@ -644,14 +687,14 @@ class GCPL5_batch:
         else:
             ax.set_title(self.title)
 
-        if show:
-            plt.show()
-
         if save:
             if savename:
                 plt.savefig(savename + '.' + imagetype)
             else:
                 plt.savefig('batch_' + self.title + '_DCIR_average' + '.' + imagetype)
+
+        if show:
+            plt.show()
 
         plt.close(fig)
 
