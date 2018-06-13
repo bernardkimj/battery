@@ -234,32 +234,29 @@ class CV:
                             curve_number = int(row[0][5::])
                             cyclenumbers.append(curve_number)
                             switch = index + 2
+
+                            # Save previous cycle's information
                             if current_cycle_time:
                                 self.cycles[curve_number-1] = {
                                     'time': current_cycle_time,
                                     'voltage': current_cycle_voltage,
                                     'current': current_cycle_current,
                                 }
+
+                                # Erase previous cycle's temporary data
                                 current_cycle_time = []
                                 current_cycle_voltage = []
                                 current_cycle_current = []
 
+                        # Save current cycle's data into temporary lists
                         if (self.is_num(row[0]) and switch and index > switch):
-                            # Save data and convert current to mA
                             current_cycle_time.append(float(row[1]))
                             current_cycle_voltage.append(float(row[2]))
-                            current_cycle_current.append(float(row[3]) * 1000/self.area)
+                            current_cycle_current.append(float(row[3]) 
+                                * 1000/self.area)
 
                 except Exception:
                     raise
-
-            # Save data and convert current to mA
-            if len(cyclenumbers) > 0:
-                self.cycles[curve_number] = {
-                    'time': current_cycle_time,
-                    'voltage': current_cycle_voltage,
-                    'current': current_cycle_current * 1000,
-                }
 
         self.title = filename[:-4]
 
@@ -269,6 +266,7 @@ class CV:
             return True
         except ValueError:
             return False
+
 
     def find_min_max(self, list, param, extreme):
         ''' For list with dictionary entries [{}, {},], finds maximum or 
@@ -282,6 +280,7 @@ class CV:
             min_value = min(values)
             min_idx = values.index(min_value)
             return list[min_idx]
+
 
     def moving_average(self, interval, window_size, weight=None):
         ''' Calculates moving average to smooth noise from data 
@@ -307,15 +306,16 @@ class CV:
 
         return np.convolve(interval, window, 'valid')
 
+
     def plot_current_voltage(self, cycle_index=0, xlim=None, ylim=None, 
-        title=None, show=False, save=False, savename=None, imagetype='png'):
+        title=None, show=False, save=False, savename=None):
         ''' Plots current vs voltage for one or all cycles '''
 
-        font = {'family': 'Arial', 'size': 40}
+        font = {'family': 'Arial', 'size': 24}
         matplotlib.rc('font', **font)
 
         # coloridx = np.linspace(0.4,1,len(self.cycles)) # for use with Blues cmap
-        coloridx = np.linspace(0,1,len(self.cycles)) # for use with viridis cmap
+        coloridx = np.linspace(0,0.9,len(self.cycles)) # for use with viridis cmap
 
         fig, ax = plt.subplots(figsize=(16,10), dpi=75)
 
@@ -328,13 +328,13 @@ class CV:
                         label = 'Cycle '+str(cycle))
             ax.legend()
         else:
-            for i in range(1,len(self.cycles)):
-                ax.plot(self.cycles[i]['voltage'],
-                        self.cycles[i]['current'],
+            for cycle in self.cycles:
+                ax.plot(self.cycles[cycle]['voltage'],
+                        self.cycles[cycle]['current'],
                         linewidth=3,
-                        color=plt.cm.inferno(coloridx[i-1]),
-                        label='Cycle '+str(i))
-            ax.legend(fontsize=28)
+                        color=plt.cm.inferno(coloridx[cycle-1]),
+                        label='Cycle '+str(cycle))
+            ax.legend()
 
         ax.set_xlabel('Potential [V]')
         ax.set_ylabel('Current [mA/cm$^2$]')
@@ -350,16 +350,17 @@ class CV:
         else:
             ax.set_title(self.title + '_C' + str(cycle_index))
 
+        if save:
+            if savename:
+                plt.savefig(savename + '.png')
+            else:
+                plt.savefig('single_' + self.title + '_C' + str(cycle_index) + '.png')
+
         if show:
             plt.show()
 
-        if save:
-            if savename:
-                plt.savefig(savename + '.' + imagetype)
-            else:
-                plt.savefig('single_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
-
         plt.close(fig)
+
 
     def extrema_smoothed_wd(self, save_csv=False, showplot=False, saveplot=False):
         ''' Extracts maximum and minumum points on each CV curve for each cycle
@@ -370,7 +371,7 @@ class CV:
         # !!!!! MAY WANT TO CHANGE THIS LATER FOR LINEAR EXTRAPOLATION PURPOSES !!!!!
 
         voltagethresh = 2 # positive and negative hard voltage bounds, no effect when == 2
-        smoothsize = 0.10 # size of smoothing window, as percent of individual scan length
+        smoothsize = 0.05 # size of smoothing window, as fraction of individual scan length
         lbsize = 0.10 # window lower bound size (for g-w), as percent of scan length
         ubsize = 0.25 # window upper bound size (for g-w), as percent of scan length
 
@@ -382,7 +383,7 @@ class CV:
             times = self.cycles[cycle]['time']
 
             # Split voltage, current, and time lists into cathodic and anodic scans
-            scan_switch = voltages.index(max(voltages))
+            scan_switch = voltages.index(min(voltages))
 
             anodic = {
                 'V_raw': np.array(voltages[:scan_switch]),
@@ -463,9 +464,9 @@ class CV:
 
                     # Pull out point for maximum/minumum current for given window size
                     if scan is anodic:
-                        windowExtreme = self.find_min_max(extremaPairs, 'current', 'max')
-                    elif scan is cathodic:
                         windowExtreme = self.find_min_max(extremaPairs, 'current', 'min')
+                    elif scan is cathodic:
+                        windowExtreme = self.find_min_max(extremaPairs, 'current', 'max')
 
                     # Populate master list of extreme currents for all window sizes
                     totalExtrema[window - windows[0]] = windowExtreme
@@ -473,10 +474,10 @@ class CV:
                 # Find most optimal extrema for all window and gradient possibilities and
                 # populate master list of extrema per cycle
                 if scan is anodic:
-                    realExtreme = self.find_min_max(totalExtrema, 'current', 'max')
+                    realExtreme = self.find_min_max(totalExtrema, 'current', 'min')
                     allPairs[cycle]['anodic'] = realExtreme
                 elif scan is cathodic:
-                    realExtreme = self.find_min_max(totalExtrema, 'current', 'min')
+                    realExtreme = self.find_min_max(totalExtrema, 'current', 'max')
                     allPairs[cycle]['cathodic'] = realExtreme
 
                 # Compute potential difference (E_p_ox - E_p_red) and current ratio (I_p_ox/I_p_red)
@@ -501,7 +502,7 @@ class CV:
                 ax.grid()
 
                 plt.show()
-                plt.close()
+                # plt.close()
 
                 if saveplot:
                     plt.savefig('wd_' + self.title + '_C' + str(cycle) + '.png')
@@ -524,6 +525,106 @@ class CV:
                     fwrite.writerow(row)
 
                 f.close
+
+
+    def get_charges(self):
+        ''' Determines total amount of charge passed for both cathodic and 
+            anodic scans per cycle. Integrates current wrt time using midpoint 
+            (rectangular) rule. '''
+
+        # Instantiate dictionary to export
+        allcharge = {
+            cycle: {
+                'oxidation': 0,
+                'reduction': 0,
+            } for cycle in self.cycles
+        }
+
+        for cycle in self.cycles:
+            times = self.cycles[cycle]['time']
+            currents = self.cycles[cycle]['current']
+
+            # Get time step value, dt
+            t_start = min(times)
+            t_end = max(times)
+            dt = (t_end-t_start)/(len(times)-1)
+
+            oxidation = 0 # positive currents
+            reduction = 0 # negative currents
+
+            for current in currents:
+                charge = current*dt * (1/3600) # [mAh], mA*s*(1h/3600 s)
+
+                if np.sign(current) == 1:
+                    oxidation += np.abs(charge)
+                elif np.sign(current) == -1:
+                    reduction += np.abs(charge)
+
+            allcharge[cycle]['oxidation'] = oxidation
+            allcharge[cycle]['reduction'] = reduction
+
+        self.charges = allcharge
+
+
+    def plot_charge(self, show=False, save=False, title=None, savename=None):
+        ''' Plots total oxidation and reduction charge per cycle of CV '''
+
+        self.get_charges()
+
+        font = {'family': 'Arial', 'size': 24}
+        matplotlib.rc('font', **font)
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, 
+            figsize=(16,10), dpi=75)
+
+        plotcycles = [cycle for cycle in self.charges]
+        oxidation = [self.charges[cycle]['oxidation'] for cycle in self.charges]
+        reduction = [self.charges[cycle]['reduction'] for cycle in self.charges]
+
+        efficiency = []
+        for ox, red in zip(oxidation, reduction):
+            efficiency.append(ox/red * 100)
+
+        ax1.plot(plotcycles, oxidation, 
+            linewidth=3, marker='o', markersize=10, color='r', 
+            label='Oxidation')
+        ax1.plot(plotcycles, reduction, 
+            linewidth=3, marker='o', markersize=10, color='b', 
+            label='Reduction')
+
+        ax2.plot(plotcycles, efficiency,
+            linewidth=3, marker='o', markersize=10, color='k',
+            label='oxidation/reduction')
+
+        ax1.set_ylabel('Charge [mAh/cm'+r'$^2$'+']')
+        ax2.set_ylabel('Cycle Efficiency [%]')
+        ax2.set_xlabel('Cycle Number')
+
+        ax2.set_xlim(xmin=1, xmax=max(plotcycles))
+
+        ax1.legend()
+        ax2.legend()
+        ax1.grid()
+        ax2.grid()
+
+        if title:
+            fig.suptitle(title)
+        else:
+            fig.suptitle(self.title + '_charge')
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.png')
+            else:
+                plt.savefig(self.title+'_charge'+'.png')
+
+        if show:
+            plt.show()
+
+        plt.close(fig)
+
+
+
 
     def reduce_file_LEGACY(self):
         ''' Reduces file size of oversampled data '''
@@ -640,126 +741,6 @@ class CV:
 
             f.close
 
-    def extrema_raw_wd_LEGACY(self, title=None):
-        ''' Extracts maximum and minimum points on each CV curve for each cycle
-            Uses gradient/window method 
-            Written by Bernard Kim '''
-
-        # LEGACY CODE - uses window/gradient algorithm to find current extrema
-
-        del self.cycles[7] # removes last element of self.cycles (incomplete cycle)
-        # !!!!!! MAY WANT TO CHANGE THIS LATER FOR LINEAR EXTRAPOLATION PURPOSES !!!!!!
-
-        voltagethresh = 1.5 # positive and negative hard voltage bounds
-
-        allPairs = []
-
-        for cyclenum,cycle in enumerate(self.cycles,1):
-            voltages = self.cycles[cycle]['voltage']
-            currents = self.cycles[cycle]['current']
-            times = self.cycles[cycle]['time']
-
-            # Set window size as a function of cycle data length
-            lowerbound = round(0.10*len(times)) # set to 1% of total cycle length
-            upperbound = round(0.25*len(times)) # set to 10% of total cycle length
-            windows = list(range(lowerbound,upperbound)); # index of center of window
-            # 1/2 window size, symmetric positive and negative offsets
-
-            totalMax = [[] for window in windows]
-            totalMin = [[] for window in windows]
-
-            for window in windows:
-                # create list of valid positions based on window size
-                positions = list(range(window,len(times)-window))
-                points = [[] for position in positions]
-
-                for position in positions:
-                    # pull out voltage, current at left, middle, and right window positions
-                    backvoltage, backcurrent = voltages[position-window], currents[position-window]
-                    frontvoltage, frontcurrent = voltages[position+window], currents[position+window]
-                    middlevoltage, middlecurrent = voltages[position], currents[position]
-
-                    if frontvoltage == middlevoltage or backvoltage == middlevoltage: # otherwise divide by 0
-                        backslope = 0
-                        frontslope = 0
-                    else:
-                        # calculate secant 1st derivative based on lower and upper combinations of points
-                        backslope = (middlecurrent-backcurrent)/(middlevoltage-backvoltage)
-                        frontslope = (frontcurrent-middlecurrent)/(frontvoltage-middlevoltage)
-
-                    # for each point, create dictionary containing slope products, middle points, and 
-                    # endpoint voltages
-                    points[position-window] = {
-                        'slopeprod': backslope*frontslope,
-                        'pair': {
-                            'voltage': middlevoltage, 
-                            'current': middlecurrent,
-                        },
-                        'endpoints': {
-                            'back': backvoltage,
-                            'front': frontvoltage,
-                        },
-                    }
-
-                # fill with dummy values to prevent empty sequence errors
-                maxPairs = [{'voltage':0, 'current':0}]
-                minPairs = [{'voltage':0, 'current':0}]
-
-                for point in points:
-                    # negative slope product means slopes have opposite signs and surround local extrema
-                    if point['slopeprod'] < 0:
-                        # local maxima, monotonically increasing voltage
-                        if (
-                                point['endpoints']['back'] < point['pair']['voltage'] and 
-                                point['pair']['voltage'] < point['endpoints']['front'] 
-                                and point['pair']['voltage'] < voltagethresh
-                            ):
-                            maxPairs.append(point['pair']) # adds valid maxPair to maxPairs list
-                        # local minima, monotonically decreasing voltage
-                        elif (
-                                point['endpoints']['back'] > point['pair']['voltage'] and 
-                                point['pair']['voltage'] > point['endpoints']['front'] 
-                                and point['pair']['voltage'] > -voltagethresh
-                            ):
-                            minPairs.append(point['pair']) # adds valid minPair to minPairs list
-
-                # pull out point for max/min current for given window size
-                windowMax = max(maxPairs, key=lambda x:x['current'])
-                windowMin = min(minPairs, key=lambda x:x['current'])
-
-                # populate master list of max/min currents for all window sizes
-                totalMax[window - windows[0]] = windowMax
-                totalMin[window - windows[0]] = windowMin
-
-            # find most optimal max/min for all window and gradient possibilities
-            realMax = max(totalMax, key=lambda x:x['current'])
-            realMin = min(totalMin, key=lambda x:x['current'])
-
-            # populate master list of max/min per cycle (list of dictionaries with subdictionaries)
-            allPairs.append(
-                {
-                'Max': realMax,
-                'Min': realMin,
-                }
-            )
-
-        # write data to csv file
-        filename = str(title)
-
-        with open('extrema_' + filename[:-4] + '.csv', 'w', newline='\n') as f:
-            fwrite = csv.writer(f, delimiter=',',quotechar='"')
-            fwrite.writerow(['Cycle','Max Voltage (V)', 'Max Current (mA)','Min Voltage (V)','Min Current (mA)'])
-
-            for idx,allPair in enumerate(allPairs,1):
-                maxVolt = allPair['Max']['voltage']
-                maxCurr = allPair['Max']['current']
-                minVolt = allPair['Min']['voltage']
-                minCurr = allPair['Min']['current']
-                row = [idx, maxVolt, maxCurr, minVolt, minCurr]
-                fwrite.writerow(row)
-
-            f.close
-
 class CV_batch:
     ''' Method for batch processing data from Gamry
     Uses methods defined in CV class
@@ -799,9 +780,9 @@ class CV_batch:
         isGPEmatch = re.search(r'GPE', filename)
         isILmatch = re.search(r'IL', filename)
         ILmatch = re.search(r'[A-Z]{1}MIM[a-zA-Z\d]{3,4}', filename)
-        molmatch = re.search(r'0,\d{1}M', filename)
+        molmatch = re.search(r'0,\d{1}m', filename)
         numatch = re.search(r'\d{2,3}mVs', filename)
-        Nmatch = re.search(r'S\d{1,2}', filename)
+        Nmatch = re.search(r'v\d{1,2}', filename)
 
         # Determines order of elements in title
         titlematches = [isGPEmatch, isILmatch, ILmatch, molmatch, numatch]
@@ -833,9 +814,9 @@ class CV_batch:
             elif var == 'nu':
                 samplevar = numatch.group(0)
                 if Nmatch:
-                    sampleidx = samplevar[:-3] + ' ' + samplevar[-3:-1] + '/' + samplevar[-1] + samplenum
+                    sampleidx = samplevar[:-3] + ' ' + 'mV/s ' + samplenum
                 else:
-                    sampleidx = samplevar[:-3] + ' ' + samplevar[-3:-1] + '/' + samplevar[-1]
+                    sampleidx = samplevar[:-3] + ' ' + 'mV/s'
             elif var is None:
                 samplevar = None
                 sampleidx = filename
@@ -861,7 +842,8 @@ class CV_batch:
         font = {'family': 'Arial', 'size': 28}
         matplotlib.rc('font', **font)
 
-        # coloridx = np.linspace(0.5,1,len(self.allcycles)) # for use with Blues colormap
+        # coloridx = np.linspace(0.5,1,len(self.allcycles)) 
+        # for use with Blues colormap
         coloridx = np.linspace(0,1,10) # for use with tab10 colormap
 
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
@@ -893,7 +875,8 @@ class CV_batch:
             if savename:
                 fig.savefig(savename + '.' + imagetype)
             else:
-                fig.savefig('batch_' + self.title + '_C' + str(cycle_index) + '.' + str(imagetype))
+                fig.savefig('batch_' + self.title + '_C' + str(cycle_index) + 
+                    '.' + str(imagetype))
 
         if show:
             plt.show()
