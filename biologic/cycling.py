@@ -97,6 +97,7 @@ class GCPL:
             # titlematch = re.search(r'CELL.*\d{1}_C', self.filename)
             # self.title = titlematch.group(0)[:-2]
 
+
     def get_IR_data(self):
         ''' Calculates IR data upon charge, discharge, and rest per cycle 
             Organized in dictionary with keys 'charge', 'discharge', 'rest' 
@@ -140,6 +141,7 @@ class GCPL:
             for step in self.DCIR[cycle]:
                 self.DCIR[cycle][step]['average'] = np.mean(
                     self.DCIR[cycle][step]['all'])
+
 
     def plot_setup(self, params):
 
@@ -645,6 +647,162 @@ class GCPL5:
 
         if save:
             plt.savefig(self.title + '_Capacity' + '.'+ imagetype)
+        if show:
+            plt.show()
+
+        plt.close(fig)
+
+
+class GCPL_batch:
+    ''' Plots batches of samples together
+        Uses defined methods from GCPL class '''
+
+    def __init__(self, files):
+        ''' Initializes and organizes files 
+            Dictionary of GCPL5 objects with overarching title '''
+
+        self.alldata = {}
+
+        for file in files:
+            data = GCPL(file)
+            samplesearch = re.search(r'_S\d{1,2}', data.filename)
+            sample = samplesearch.group(0)[2:]
+            self.alldata[int(sample)] = data
+
+        titlesearch = re.search(r'CELL.*\d{8}', \
+            self.alldata[list(self.alldata.keys())[0]].title)
+        self.title = titlesearch.group(0)
+
+
+    def plot_capacity(self, discharge=True, charge=True, xlim=False, ylim=[0,1], 
+        title=None, show=False, save=False,):
+        ''' Plots charge/discharge capacity vs cycle '''
+
+        params = {
+            'xlim': xlim,
+            'ylim': ylim,
+            'title': title,
+            'titletag': '_Capacity',
+            'xlabel': 'Cycle Number',
+            'ylabel': 'Capacity ' + r'$[mAh]$'
+        }
+
+        fig, ax = self.plot_setup(params=params)
+
+        # Get list of all cycle numbers
+        # Omit cycle 0 from plotting
+        cycles = list(self.cycles.keys())[1:]
+
+        # Plot both discharge and charge by default
+        if discharge:
+            Qdischarge = [np.max(self.cycles[cycle]['Qdischarge']) for cycle in cycles]
+            ax.plot(cycles[:-1], Qdischarge[:-1], color='b', linewidth=2, label=r'$Q_{discharge}$')
+        if charge:
+            plotcycles = [cycle-1 for cycle in cycles] # To make charge curve line up with discharge
+            Qcharge = [np.max(self.cycles[cycle]['Qcharge']) for cycle in cycles]
+            ax.plot(plotcycles, Qcharge, color='r', linewidth=2, label=r'$Q_{charge}$')
+
+        ax.legend()
+
+        if save:
+            plt.savefig(self.title + params['titletag']+'.png')
+        if show:
+            plt.show()
+
+        plt.close(fig)
+
+
+    def plot_DCIR_discrete(self, xlim=None, ylim=None, title=None, 
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots discrete curves for DCIR vs cycle number '''
+
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
+        coloridx = np.linspace(0,1,10) # For use with tab10 colormap
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        for idx, sample in enumerate(sorted(list(self.alldata.keys()))):
+            ax.plot(self.alldata[sample].DCIR['cycles'], self.alldata[sample].DCIR['average'],
+                color=plt.cm.tab10(coloridx[idx]), linewidth=3,
+                label='S'+str(sample))
+
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel('DCIR [Ω]')
+        ax.legend()
+        ax.grid()
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        if show:
+            plt.show()
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_' + self.title + '_DCIR_discrete' + '.' + imagetype)
+
+        plt.close(fig)
+
+    def plot_DCIR_average(self, confidence=0.95, xlim=None, ylim=None, title=None, 
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots average DCIR vs cycle number
+            Includes confidence interval '''
+
+        # Combines all sample data into list of tuples (x,y) by sample number (len = # of samples)
+        data = [(self.alldata[sample].DCIR['cycles'], self.alldata[sample].DCIR['average']) \
+            for sample in sorted(list(self.alldata.keys()))]
+
+        cycles, mean, std, lcl, ucl = utilities.batch_average_plot(data, confidence=confidence)
+
+        font = {'family': 'Arial', 'size': 28}
+        matplotlib.rc('font', **font)
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        for sample in data:
+            ax.plot(sample[0], sample[1], color='b', linewidth=3, alpha=0.2)
+        ax.plot(cycles, mean, color='b', linewidth=3)
+
+        if confidence:
+            ax.plot(cycles, lcl, color='b', linestyle='--', linewidth=2, 
+                label=str(confidence)[2:]+'% Confidence Interval (t-test)')
+            ax.plot(cycles, ucl, color='b', linestyle='--', linewidth=2)
+            ax.fill_between(cycles, ucl, lcl, color='b', alpha=0.2)
+        else:
+            ax.plot(cycles, mean+std, color='b', linestyle='--', linewidth=2, 
+                label='±1 '+r'$\sigma$')
+            ax.plot(cycles, mean-std, color='b', linestyle='--', linewidth=2)
+            ax.fill_between(cycles, mean+std, mean-std, color='b', alpha=0.2)
+
+        ax.set_xlabel('Cycle Number')
+        ax.set_ylabel('DCIR [Ω]')
+        ax.legend()
+        ax.grid()
+
+        if xlim:
+            ax.set_xlim(xlim)
+        if ylim:
+            ax.set_ylim(ylim)
+
+        if title:
+            ax.set_title(title)
+        else:
+            ax.set_title(self.title)
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_' + self.title + '_DCIR_average' + '.' + imagetype)
+
         if show:
             plt.show()
 
