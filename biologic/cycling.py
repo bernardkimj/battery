@@ -34,6 +34,7 @@ class GCPL:
             # 'cycle number': 'cycle',
             'time/s': 'time', 
             'Ecell/V': 'voltage', 
+            'Ewe/V': 'voltage',
             '<I>/mA': 'current', 
             'I/mA': 'current',
             'Q discharge/mA.h': 'Qdischarge',
@@ -106,7 +107,7 @@ class GCPL:
             '''
 
         # Initialize dictionary for raw data
-        self.DCIR = {
+        DCIR = {
             cycle: {
                 step: {
                     'all': [],
@@ -121,10 +122,14 @@ class GCPL:
             dV = self.voltage[idx] - self.voltage[idx-1]
             dI = self.current[idx] - self.current[idx-1]
 
-            if dI != 0:
-                previous = self.current[idx-1]
-                present = self.current[idx]
+            # if dI != 0:
+            #     previous = self.current[idx-1]
+            #     present = self.current[idx]
 
+            previous = self.current[idx-1]
+            present = self.current[idx]
+
+            if np.sign(previous) != np.sign(present):
                 if np.sign(present) == 1 and np.sign(previous) != 1:
                     key = 'charge'
                 elif np.sign(present) == -1 and np.sign(previous) != -1:
@@ -132,41 +137,109 @@ class GCPL:
                 elif np.sign(present) == 0 and np.sign(previous) != 0:
                     key = 'rest'
 
-                resistance = np.abs(dV/(dI/1000))
+                resistance = np.abs(dV/(dI/1000)) # Ohms
 
-                self.DCIR[int(self.rawcycles[idx])][key]['all'].append(resistance)
+                DCIR[int(self.rawcycles[idx])][key]['all'].append(resistance)
 
         # Fill in average values for all steps for all cycles
-        for cycle in self.DCIR:
-            for step in self.DCIR[cycle]:
-                self.DCIR[cycle][step]['average'] = np.mean(
-                    self.DCIR[cycle][step]['all'])
+        self.DCIR = {}
+
+        for cycle in DCIR:
+            self.DCIR[cycle] = {}
+
+            for step in DCIR[cycle]:
+                self.DCIR[cycle][step] = np.mean(DCIR[cycle][step]['all'])
 
 
-    def plot_setup(self, params):
+    def get_dQdV(self, cycles=None):
+        ''' Calculates dQ/dV from cycling data
+            Length of vector is len(voltage)-1
+            Also prepares raw charge/discharge capacity vs. voltage
+        '''
 
-        # Plotting formatting
-        font = {'family': 'Arial', 'size': 20}
-        matplotlib.rc('font', **font)
+        if not cycles:
+            cycles = [cycle for cycle in self.cycles]
 
-        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+        # Initialize dictionaries for raw data
+        self.dQdV_C = {
+            cycle: {
+                'dQdV': [],
+                'voltage': [],
+            } for cycle in cycles
+        }
 
-        if params['xlim']:
-            ax.set_xlim(params['xlim'])
-        if params['ylim']:
-            ax.set_ylim(params['ylim'])
+        self.dQdV_D = {
+            cycle: {
+                'dQdV': [],
+                'voltage': [],
+            } for cycle in cycles
+        }
 
-        if params['title']:
-            ax.set_title(params['title'])
-        else:
-            title = self.title + params['titletag']
-            ax.set_title(title)
+        self.DoC = {
+            cycle: {
+                'Qcharge': [],
+                'voltage': [],
+            } for cycle in cycles
+        }
 
-        ax.set_xlabel(params['xlabel'])
-        ax.set_ylabel(params['ylabel'])
-        ax.grid()
+        self.DoD = {
+            cycle: {
+                'Qdischarge': [],
+                'voltage': [],
+            } for cycle in cycles
+        }
 
-        return fig, ax
+        for cycle in cycles:
+            charge, discharge = [], []
+
+            for voltage, current, Qcharge, Qdischarge in zip(
+                self.cycles[cycle]['voltage'], \
+                self.cycles[cycle]['current'], \
+                self.cycles[cycle]['Qcharge'], \
+                self.cycles[cycle]['Qdischarge'],
+            ):
+
+                if Qcharge != 0 and current > 0:
+                    charge.append((voltage, Qcharge))
+
+                if Qdischarge != 0 and current < 0:
+                    discharge.append((voltage, Qdischarge))
+
+            for step in (charge, discharge):
+                voltage = [point[0] for point in step]
+                Q_raw = [point[1] for point in step]
+
+                dQdV, dQdV_voltage = [], []
+
+                for idx in range(1, len(voltage)):
+                    dV = voltage[idx] - voltage[idx-1]
+                    dQ = Q_raw[idx] - Q_raw[idx-1]
+
+                    if dV != 0:
+                        dQdV.append(dQ/dV)
+                        dQdV_voltage.append(voltage[idx])
+
+                if step == charge:
+                    self.dQdV_C[cycle]['dQdV'] = dQdV
+                    self.dQdV_C[cycle]['voltage'] = dQdV_voltage
+                    self.DoC[cycle]['voltage'] = voltage
+                    self.DoC[cycle]['Qcharge'] = Q_raw
+                elif step == discharge:
+                    self.dQdV_D[cycle]['dQdV'] = dQdV
+                    self.dQdV_D[cycle]['voltage'] = dQdV_voltage
+                    self.DoD[cycle]['voltage'] = voltage
+                    self.DoD[cycle]['Qdischarge'] = Q_raw
+
+
+    def get_efficiency(self):
+        ''' Calculates efficiency per cycle
+            saves to self.cycles[cycle]['efficiency']
+        '''
+
+        for cycle in self.cycles:
+            self.cycles[cycle]['efficiency'] = np.max(
+                self.cycles[cycle]['Qdischarge']) / \
+                np.max(self.cycles[cycle]['Qcharge']) * 100
 
 
     def plot_voltage(self, xlim=None, ylim=None, title=None,
@@ -182,9 +255,14 @@ class GCPL:
             'ylabel': 'Voltage [V]'
         }
 
-        fig, ax = self.plot_setup(params=params)
+        fig, ax = utilities.plot_setup(params=params)
 
-        ax.plot(self.time, self.voltage, color='b', linewidth=2,)
+        ax.plot(
+            self.time, 
+            self.voltage, 
+            color='b', 
+            linewidth=2,
+        )
 
         if save:
             plt.savefig(self.title + params['titletag']+'.png')
@@ -208,11 +286,15 @@ class GCPL:
         }
 
         cycles = list(self.cycles.keys())[1:]
-        efficiency = [np.max(self.cycles[cycle]['Qdischarge'])/np.max(
-            self.cycles[cycle]['Qcharge'])*100 for cycle in cycles]
+        efficiency = [self.cycles[cycle]['efficiency'] for cycle in cycles]
 
-        fig, ax = self.plot_setup(params=params)
-        ax.plot(cycles[:-1], efficiency[:-1], color='b', linewidth=2,)
+        fig, ax = utilities.plot_setup(params=params)
+        ax.plot(
+            cycles[:-1], 
+            efficiency[:-1], 
+            color='b', 
+            linewidth=2,
+        )
 
         if save:
             plt.savefig(self.title + params['titletag']+'.png')
@@ -222,7 +304,7 @@ class GCPL:
         plt.close(fig)
 
 
-    def plot_capacity(self, discharge=True, charge=True, xlim=False, ylim=[0,1], 
+    def plot_capacity(self, discharge=True, charge=True, xlim=False, ylim=False, 
         title=None, show=False, save=False,):
         ''' Plots charge/discharge capacity vs cycle '''
 
@@ -235,7 +317,7 @@ class GCPL:
             'ylabel': 'Capacity ' + r'$[mAh]$'
         }
 
-        fig, ax = self.plot_setup(params=params)
+        fig, ax = utilities.plot_setup(item=self, params=params)
 
         # Get list of all cycle numbers
         # Omit cycle 0 from plotting
@@ -243,12 +325,29 @@ class GCPL:
 
         # Plot both discharge and charge by default
         if discharge:
-            Qdischarge = [np.max(self.cycles[cycle]['Qdischarge']) for cycle in cycles]
-            ax.plot(cycles[:-1], Qdischarge[:-1], color='b', linewidth=2, label=r'$Q_{discharge}$')
+            Qdischarge = [np.max(self.cycles[cycle]['Qdischarge']) 
+                for cycle in cycles]
+
+            ax.plot(
+                cycles[:-1], 
+                Qdischarge[:-1], 
+                color='b', 
+                linewidth=2, 
+                label=r'$Q_{discharge}$'
+            )
         if charge:
-            plotcycles = [cycle-1 for cycle in cycles] # To make charge curve line up with discharge
-            Qcharge = [np.max(self.cycles[cycle]['Qcharge']) for cycle in cycles]
-            ax.plot(plotcycles, Qcharge, color='r', linewidth=2, label=r'$Q_{charge}$')
+            # To make charge curve line up with discharge
+            plotcycles = [cycle-1 for cycle in cycles] 
+            Qcharge = [np.max(self.cycles[cycle]['Qcharge']) 
+                for cycle in cycles]
+
+            ax.plot(
+                plotcycles, 
+                Qcharge, 
+                color='r', 
+                linewidth=2, 
+                label=r'$Q_{charge}$'
+            )
 
         ax.legend()
 
@@ -258,6 +357,20 @@ class GCPL:
             plt.show()
 
         plt.close(fig)
+
+
+    def get_capacity_fade(self):
+        ''' Calculates capacity fade
+            Similar to capacity per cycle but normalized to first cycle capacity
+            saves to self.cycles[cycle]['fade']
+        '''
+
+        baseline = np.max(self.cycles[cycle[0]]['Qdischarge'])
+
+        for cycle in self.cycles:
+            self.cycles[cycle]['fade'] = np.max(
+                self.cycles[cycle]['Qdischarge']) / \
+                baseline * 100
 
 
     def plot_capacity_fade(self, xlim=False, ylim=[0,100], title=None, 
@@ -275,14 +388,14 @@ class GCPL:
             'ylabel': 'Capacity Fade [%]'
         }
 
-        fig, ax = self.plot_setup(params=params)
+        fig, ax = utilities.plot_setup(params=params)
 
         # Get list of all cycle numbers
         # Omit cycle 0 from plotting
         cycles = list(self.cycles.keys())[1:]
 
-        baseline = np.max(self.cycles[cycles[0]]['Qdischarge'])
-        fade = [np.max(self.cycles[cycle]['Qdischarge'])/baseline*100 for cycle in cycles]
+        # baseline = np.max(self.cycles[cycles[0]]['Qdischarge'])
+        fade = [self.cycles[cycle]['fade'] for cycle in cycles]
 
         ax.plot(cycles[:-1], fade[:-1], color='b', linewidth=2)
 
@@ -313,7 +426,7 @@ class GCPL:
             'ylabel': 'DC Internal Resistance [Ω]'
         }
 
-        fig, ax = self.plot_setup(params=params)
+        fig, ax = utilities.plot_setup(params=params)
 
         plotcolors = {'charge':'r', 'discharge':'g', 'rest':'b'}
         plotcycles = list(self.DCIR.keys())
@@ -384,7 +497,7 @@ class GCPL:
             'ylabel': 'Voltage [V]',
         }
 
-        fig, ax = self.plot_setup(params=params)
+        fig, ax = utilities.plot_setup(params=params)
 
         if charge:
             DOC = {}
@@ -511,7 +624,7 @@ class GCPL5:
                 'Echarge': [],
             }
 
-        self.voltage, self.current = [], []
+        self.time, self.voltage, self.current = [], [], []
 
         for row in rows[1:]:
             self.cycles[int(float(row[cycleidx]))]['time'].append(float(row[timeidx]))
@@ -522,6 +635,7 @@ class GCPL5:
             self.cycles[int(float(row[cycleidx]))]['Edischarge'].append(float(row[Edischargeidx]))
             self.cycles[int(float(row[cycleidx]))]['Echarge'].append(float(row[Echargeidx]))
 
+            self.time.append(float(row[timeidx]))
             self.voltage.append(float(row[voltageidx]))
             self.current.append(float(row[currentidx]))
 
@@ -530,7 +644,7 @@ class GCPL5:
         if title:
             self.title = title
         else:
-            titlematch = re.search(r'CELL.*\d{1}_C', self.filename)
+            titlematch = re.search(r'_S.*\d{1}_', self.filename)
             self.title = titlematch.group(0)[:-2]
 
     def get_IR_data(self):
@@ -665,16 +779,20 @@ class GCPL_batch:
 
         for file in files:
             data = GCPL(file)
-            samplesearch = re.search(r'_S\d{1,2}', data.filename)
-            sample = samplesearch.group(0)[2:]
+            samplesearch = re.search(r'_S[A-Z]{0,1}\d{1,2}_', data.filename)
+            sample = samplesearch.group(0)[-2:-1]
+            # samplesearch = re.search(r'_S\d{1,2}_', data.filename)
+            # sample = samplesearch.group(0)[2:-1]
+            
             self.alldata[int(sample)] = data
 
-        titlesearch = re.search(r'CELL.*\d{8}', \
-            self.alldata[list(self.alldata.keys())[0]].title)
-        self.title = titlesearch.group(0)
+        # titlesearch = re.search(r'CELL.*\d{8}', \
+        #     self.alldata[list(self.alldata.keys())[0]].title)
+        # self.title = titlesearch.group(0)
+        self.title = None
 
 
-    def plot_capacity(self, discharge=True, charge=True, xlim=False, ylim=[0,1], 
+    def plot_capacity(self, discharge=True, charge=False, xlim=False, ylim=[0,1], 
         title=None, show=False, save=False,):
         ''' Plots charge/discharge capacity vs cycle '''
 
@@ -687,25 +805,41 @@ class GCPL_batch:
             'ylabel': 'Capacity ' + r'$[mAh]$'
         }
 
-        fig, ax = self.plot_setup(params=params)
+        fig, ax = utilities.plot_setup(item=self, params=params)
+        coloridx = np.linspace(0,1,10) # for use with tab10 colormap
 
-        # Get list of all cycle numbers
-        # Omit cycle 0 from plotting
-        cycles = list(self.cycles.keys())[1:]
+        for sample in self.alldata:
+            single = self.alldata[sample]
 
-        # Plot both discharge and charge by default
-        if discharge:
-            Qdischarge = [np.max(self.cycles[cycle]['Qdischarge']) for cycle in cycles]
-            ax.plot(cycles[:-1], Qdischarge[:-1], color='b', linewidth=2, label=r'$Q_{discharge}$')
-        if charge:
-            plotcycles = [cycle-1 for cycle in cycles] # To make charge curve line up with discharge
-            Qcharge = [np.max(self.cycles[cycle]['Qcharge']) for cycle in cycles]
-            ax.plot(plotcycles, Qcharge, color='r', linewidth=2, label=r'$Q_{charge}$')
+            plotcycles = list(single.cycles.keys())[1:]
+
+            if discharge:
+                plotQdischarge = [np.max(single.cycles[cycle]['Qdischarge']) 
+                    for cycle in plotcycles]
+                ax.plot(plotcycles[:-1], plotQdischarge[:-1], 
+                    color=plt.cm.tab10(coloridx[int(sample)-1]), 
+                    linewidth=2, label='S'+str(sample))
+
+            elif charge:
+                plotQcharge = [np.max(single.cycles[cycle]['Qcharge']) 
+                    for cycle in plotcycles]
+                ax.plot(plotcycles[:-1], plotQcharge[:-1], 
+                    color=plt.cm.tab10(coloridx[int(sample)-1]), 
+                    linewidth=2, label='S'+str(sample))
 
         ax.legend()
 
+        if title:
+            ax.set_title(title + '_Qdischarge')
+        else:
+            ax.set_title(self.title + '_Qdischarge')
+
         if save:
-            plt.savefig(self.title + params['titletag']+'.png')
+            if title:
+                plt.savefig(title + params['titletag']+'.png')
+            else:
+                plt.savefig('batch'+params['titletag']+'.png')
+
         if show:
             plt.show()
 

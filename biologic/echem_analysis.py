@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import re
 import csv
+from scipy import optimize
 
 class CV:
     ''' Processes cyclic voltammetry data from Biologic tester
@@ -115,6 +116,7 @@ class CV:
 
         plt.close(fig)
 
+
 class CV_batch:
     ''' Method for batch processing data from Biologic
     Uses methods defined in CV class
@@ -122,16 +124,26 @@ class CV_batch:
     Author: Bernard Kim
     '''
 
-    def __init__(self, alldata, reduce=False):
+    def __init__(self, alldata):
         # Accepts lists of class CV
-        self.allcycles = {}
+        self.cycles = {}
 
         for file in alldata:
             exported = CV(file)
 
             match = re.search(r'_\d{2}_', file)
             stepidx = int(match.group(0)[1:3])/2
-            self.allcycles[stepidx] = exported.cycles
+
+            if stepidx == 1:
+                for cycle in exported.cycles:
+                    self.cycles[(stepidx-1)*10 + cycle] = exported.cycles[cycle]
+            else:
+                for cycle in exported.cycles:
+                    if cycle > 1:
+                        self.cycles[(stepidx-1)*10 + cycle] = \
+                            exported.cycles[cycle]
+
+            # self.allcycles[stepidx] = exported.cycles
 
         titlematch = re.search(r'CELL_.*_\d{2}_', alldata[0])
         self.title = titlematch.group(0)[:-4]
@@ -143,17 +155,17 @@ class CV_batch:
         font = {'family': 'Arial', 'size': 16}
         matplotlib.rc('font', **font)
 
-        coloridx = np.linspace(0.3,1,len(self.allcycles)) # for Blues colormap
+        coloridx = np.linspace(0.3,1,len(self.cycles)) # for Blues colormap
 
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
-        for sample in sorted(self.allcycles):
-            if cycle_index:
-                ax.plot(self.allcycles[sample][cycle_index]['voltage'],
-                        self.allcycles[sample][cycle_index]['current'],
+        for idc, cycle in enumerate(sorted(self.cycles)):
+            if cycle%cycle_index == 0:
+                ax.plot(self.cycles[cycle]['voltage'],
+                        self.cycles[cycle]['current'],
                         marker='.', markersize=8,
-                        color=plt.cm.Blues(coloridx[int(sample)-1]),
-                        label='Cycle '+str(int((sample-1)*10 + cycle_index)))
+                        color=plt.cm.Blues(coloridx[idc]),
+                        label='Cycle '+str(cycle))
             # COMMENTED OUT FOR NOW BECAUSE DOESN'T MAKE SENSE TO INCLUDE FOR NOW
             # else:
             #     for i in range(1,len(self.allcycles[sample])):
@@ -188,10 +200,106 @@ class CV_batch:
 
         plt.close()
 
+
+    def get_charges(self):
+        ''' Determines total amount of charge passed for both cathodic and 
+            anodic scans per cycle. Integrates current wrt time using midpoint 
+            (rectangular) rule. '''
+
+        # Instantiate dictionary to export
+        allcharge = {
+            cycle: {
+                'oxidation': 0,
+                'reduction': 0,
+            } for cycle in self.cycles
+        }
+
+        for cycle in self.cycles:
+            times = self.cycles[cycle]['time']
+            currents = self.cycles[cycle]['current']
+
+            # Get time step value, dt
+            t_start = min(times)
+            t_end = max(times)
+            dt = (t_end-t_start)/(len(times))
+
+            oxidation = 0 # positive currents
+            reduction = 0 # negative currents
+
+            for current in currents:
+                charge = current*dt * (1/3600) # [mAh], mA*s*(1h/3600 s)
+
+                if np.sign(current) == 1:
+                    oxidation += np.abs(charge)
+                elif np.sign(current) == -1:
+                    reduction += np.abs(charge)
+
+            allcharge[cycle]['oxidation'] = oxidation
+            allcharge[cycle]['reduction'] = reduction
+
+        self.charges = allcharge
+
+    def calculate_crossover_potentials(self):
+        ''' Calculates nucleation potentials if present per cycle
+            Returns crossover potential and nucleation potential
+        '''
+
+        self.E_co = {}
+
+        for cycle in self.cycles:
+            voltages = self.cycles[cycle]['voltage']
+            currents = self.cycles[cycle]['current']
+
+            E_co = []
+
+            current_sign = np.sign(currents)
+            for idx, sign in enumerate(current_sign[1:]):
+                if sign != current_sign[idx-1]:
+                    E_co.append(voltages[idx])
+
+            # try:
+            #     if len(E_co) != 2:
+            #         raise Exception
+
+            try:
+                self.E_co[cycle] = (min(E_co), max(E_co))
+            except ValueError:
+                pass
+
+
+    def save_stats(self):
+        ''' Saves statistics for file in json
+            Requires appropriate methods to be called first for desired metrics
+            By default, will only record oxidation and reduction charges
+            Can also save CV peak potentals/currents and nucleation potentials
+        '''
+
+        filename = str(self.title)
+        stats = {}
+
+        try:
+            for cycle in self.cycles:
+                stats[int(cycle)] = {
+                    'Q_ox': self.charges[cycle]['oxidation'],
+                    'Q_red': self.charges[cycle]['reduction'],
+                }
+        except AttributeError:
+            pass
+
+        try:
+            if self.E_co:
+                for cycle in self.E_co:
+                    stats[int(cycle)]['E_co'] = self.E_co[cycle]
+        except AttributeError:
+            pass
+
+        utilities.save_json(data=stats, filename=filename+'.json')
+
+
 class PEIS:
     ''' Processes potentiostatic EIS data from Biologic tester '''
 
-    def __init__(self, filename=None, thickness=0.0365, area=1, zscale='k'):
+    def __init__(self, filename=None, thickness=0.0373, area=1, zscale='k'):
         ''' Opens file and retrieves data.
 
         Retrieves frequency, real impedance, imaginary impedance, 
@@ -223,6 +331,7 @@ class PEIS:
         for header in headers:
             idxs.append(rows[0].index(header))
 
+        # Based off order of headers list 4 rows up
         freqidx = idxs[0]
         realidx = idxs[1]
         imagidx = idxs[2]
@@ -250,7 +359,7 @@ class PEIS:
         self.imag = [imagraw/self.zscaleval for imagraw in self.imagraw]
         self.magn = [magnraw/self.zscaleval for magnraw in self.magnraw]
 
-        self.find_r_solution()
+        self.find_r_solution() # Always in Ω, not affected by zcale
         self.conductivity = (self.thickness * 1000) / (self.area * self.r_solution) #mS/cm
 
     def get_zscale(self, zscale):
@@ -361,6 +470,152 @@ class PEIS:
 
         plt.close(fig)
 
+    def get_nyquist_fit(self, plot=False):
+        ''' Calculates circular fit of Nyquist plot
+            For determining r_sol and r_ct
+        '''
+
+        # Find where high frequency behavior ends as inclusion 
+        # messes up circular fit later
+        hfend = False
+        checklen = 13 # forward length of series to check for monotonicity
+
+        # Check real and imaginary vectors until both are monotonically 
+        # increasing over checked length
+        # Point where future points for both vectors are monotonically 
+        # increasing is where high frequency region ends
+        for idx, real in enumerate(self.real[:-1]):
+            if not hfend:
+                realcheck = utilities.check_forward_monotonicity(
+                    series=self.real[idx:],
+                    type='increasing',
+                    length=checklen
+                )
+                imagcheck = utilities.check_forward_monotonicity(
+                    series=self.imag[idx:],
+                    type='increasing',
+                    length=checklen
+                )
+
+                if realcheck == True and imagcheck == True:
+                    hfend = idx
+
+        # Take derivative of remaining region
+        d1 = []
+
+        for idx in range(hfend, len(self.real[:-1])):
+            delta_x = self.real[idx+1] - self.real[idx]
+            delta_y = self.imag[idx+1] - self.imag[idx]
+            d1.append(delta_y/delta_x)
+
+        # plt.plot(list(range(len(d1))), d1)
+        # plt.show()
+
+        # Apply smoothing algorithm to derivative in order to smooth out 
+        # local minima
+        smoothsize = 0.10
+        d1s, idxs = utilities.moving_average(
+            interval=d1, size=smoothsize, weight=None)
+        pad = idxs[0] # front pad size after smoothing
+
+        # Find point in smoothed derivative where derivative is maximum
+        d1s_max = np.where(np.array(d1s) == np.max(d1s))[0][0]
+
+        # Now find minimum of smoothed derivative to find where curvature 
+        # changes
+        d1s_min = False
+
+        # Forward length to check for monotonic decrease
+        d1check = 25
+
+        for idx, m in enumerate(d1s[d1s_max:-d1check-1],d1s_max):
+            if not d1s_min:
+                mincheck = utilities.check_forward_monotonicity(
+                    series=d1s[idx:],
+                    type='decreasing',
+                    length=d1check
+                )
+
+                # Find where next point after monotonic decrease increases
+                # This is where curvature change is
+                if mincheck == True and d1s[idx+d1check] < d1s[idx+d1check+1]:
+                    d1s_min = idx+d1check
+
+        # If increase never happens, then minimum is just endpoint of vector
+        if not d1s_min:
+            d1s_min = len(d1s)+(len(d1)-idxs[1])
+
+        # Add back missing lengths from high frequency identification and 
+        # smoothing
+        bounds = (d1s_max+pad+hfend, d1s_min+pad+hfend)
+
+        # plt.plot(list(range(pad+hfend, pad+hfend+len(d1s))), d1s)
+        # plt.axvline(d1s_max+pad+hfend, color='k')
+        # plt.axvline(d1s_min+pad+hfend, color='k')
+        # plt.show()
+
+        # plt.plot(self.real, self.imag)
+        # plt.axvline(self.real[bounds[0]], color='k')
+        # plt.axvline(self.real[bounds[1]], color='k')
+        # plt.show()
+
+        real = self.real[bounds[0]:bounds[1]]
+        imag = self.imag[bounds[0]:bounds[1]]
+
+        # Adopted from Scipy cookbook
+        # https://scipy-cookbook.readthedocs.io/items/Least_Squares_Circle.html
+        def calc_R(x, y, xc, yc):
+            '''
+            Calculate the distance of each point from the center (xc, yc)
+            '''
+
+            return np.sqrt((x-xc)**2 + (y-yc)**2)
+
+        def f(c, x, y):
+            '''
+            Calcualte algebraic distance between the data points and 
+            the mean circle centered at c=(xc, yc)
+            '''
+
+            Ri = calc_R(x, y, *c)
+            return Ri - Ri.mean()
+
+        real_m = real[int(len(real)/2)]
+        imag_m = 0
+        center_estimate = real_m, imag_m
+        offset = 0.4
+
+        center = optimize.least_squares(
+            fun=f, x0=center_estimate, args=(real,imag), 
+            # bounds=([-np.inf, 0], np.inf),
+            bounds=([(1-offset)*real_m, 0], [(1+offset)*real_m, np.inf]),
+        )
+
+        xc, yc = center.x
+        Ri = calc_R(real, imag, *center.x)
+        R = Ri.mean()
+        residual = np.sum((Ri - R)**2)
+
+        self.xc, self.yc = xc, yc
+        self.nyquist_R = R
+
+        if plot:
+
+            theta_fit = np.linspace(0, np.pi, 180)
+            x_fit = xc + R*np.cos(theta_fit)
+            y_fit = yc + R*np.sin(theta_fit)
+
+        # print(R)
+
+            fig, ax = plt.subplots()
+            ax.plot(self.real, self.imag)
+            ax.plot(x_fit, y_fit)
+            ax.set_aspect('equal')
+
+
+            plt.show()
+
+
 class PEIS_batch:
     ''' Processes potentiostatic EIS data from Biologic tester
         Plots samples measurements FROM SAME SAMPLE on same axes 
@@ -368,18 +623,21 @@ class PEIS_batch:
 
         Uses defined methods in PEIS class '''
 
-    def __init__(self, alldata, zscale='k'):
+    def __init__(self, alldata, zscale='k', thickness=0.0373, get_nyquist=True):
         # Accepts lists of class CV
-        self.allcycles = {}
+        self.cycles = {}
 
         self.zscalestr, self.zscaleval = PEIS.get_zscale(self, zscale=zscale)
 
         for file in alldata:
-            exported = PEIS(file, zscale=zscale)
+            exported = PEIS(file, zscale=zscale, thickness=thickness)
+
+            if get_nyquist:
+                exported.get_nyquist_fit()
 
             match = re.search(r'_\d{2}_', file)
             stepidx = (int(match.group(0)[1:3])-1)/2
-            self.allcycles[stepidx] = exported
+            self.cycles[stepidx*10] = exported
 
         titlematch = re.search(r'CELL_.*_\d{2}_', alldata[0])
         self.title = titlematch.group(0)[:-4]
@@ -394,15 +652,15 @@ class PEIS_batch:
         font = {'family': 'Arial', 'size': 16}
         matplotlib.rc('font', **font)
 
-        coloridx = np.linspace(0.3,1,len(self.allcycles)) # for Blues colormap
+        coloridx = np.linspace(0.3,1,len(self.cycles)) # for Blues colormap
 
-        fig, ax = plt.subplots(figsize=(9,9), dpi=75)
+        fig, ax = plt.subplots(figsize=(12,9), dpi=75)
 
-        for sample in sorted(self.allcycles):
-            ax.plot(self.allcycles[sample].real, self.allcycles[sample].imag,
-                color=plt.cm.Blues(coloridx[int(sample)]), linewidth=2,
-                label='Cycle '+str(int(sample)*10)+', '+r'$R_{solution}$'+\
-                    ' = '+'%.2f'%self.allcycles[sample].r_solution + ' Ω')
+        for cycle in sorted(self.cycles):
+            ax.plot(self.cycles[cycle].real, self.cycles[cycle].imag,
+                color=plt.cm.Blues(coloridx[int(cycle/10)]), linewidth=2,
+                label='Cycle '+str(int(cycle))+', '+r'$R_{solution}$'+\
+                    ' = '+'%.2f'%self.cycles[cycle].r_solution + ' Ω')
 
         if xlim:
             ax.set_xlim(xlim)

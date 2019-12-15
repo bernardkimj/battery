@@ -5,10 +5,12 @@
     Principal Investigators: Paul Wright, James Evans
     Institution: University of California, Berkeley '''
 
+from battery.utilities import utilities
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import csv
 import re
 
 
@@ -234,106 +236,135 @@ class resistivity:
             rawtable.append(row)
 
         table = pd.DataFrame.from_records(rawtable, columns=headers)
+        table.to_csv(activematerial+'_statistics.csv')
+
 
         return table
 
-    # def plot_resistivity(self, inknames=None, xaxis=None, save=False):
-    #     ''' Plots resistivity as a function of specified x-axis
-    #         'AB', 'PVDF-HFP', 'activematerial', 'solidphase', 'thickness' 
-    #         Must specify inknames to include in plot via 'inknames' kwarg '''
 
-    #     # Import compiled table based on desired inknames to plot
-    #     table = self.compile_table(inknames)
+    def plot_resistivity(self, inknames=None, xaxis=None, 
+        title=None, show=False, save=False, savename=None):
+        ''' Plots resistivity as a function of specified x-axis
+            'AB', 'PVDF-HFP', 'activematerial', 'solidphase', 'thickness' 
+            Must specify inknames to include in plot via 'inknames' kwarg '''
+
+        # Import compiled table based on desired inknames to plot
+        table = self.compile_table(inknames)
         
-    #     # Sets which electrode type specified inks belong to
-    #     activematerial = self.electrode_type(inkname=inknames[0])
+        # Sets which electrode type specified inks belong to
+        activematerial = self.electrode_type(inkname=inknames[0])
 
-    #     if activematerial == 'Zn':
-    #         electrode = 'Anode'
-    #     elif activematerial == 'MnO2':
-    #         electrode = 'Cathode'
+        if activematerial == 'Zn':
+            electrode = 'Anode'
+            par_color = '#6699ff'
+            perp_color = '#0000ff'
+        elif activematerial == 'MnO2':
+            electrode = 'Cathode'
+            par_color = '#ef2e2e'
+            perp_color = '#420d0d'
 
-    #     # Sorts imported table based on desired xaxis param
-    #     sortedtable = table.sort_values(xaxis)
+        # Sorts imported table based on desired xaxis param
+        sortedtable = table.sort_values(xaxis)
 
-    #     # Set strings for plot title and labels
-    #     plotstrings = {
-    #         'Acetylene Black': {
-    #             'xlabel': 'wt% Acetylene Black',
-    #             'titlelabel': 'Acetylene Black fraction',
-    #         },
-    #         'PVDF-HFP': {
-    #             'xlabel': 'wt% PVDF-HFP',
-    #             'titlelabel': 'PVDF-HFP fraction',
-    #         },
-    #         'activematerial': {
-    #             'xlabel': 'wt% ' + activematerial,
-    #             'titlelabel': activematerial + ' fraction',
-    #         },
-    #         'solidphase': {
-    #             'xlabel': 'wt% Solid Phase',
-    #             'titlelabel': 'Solid Phase',
-    #         },
-    #         'thickness': {
-    #             'xlabel': 'Sample Thickness (mm)',
-    #             'titlelabel': 'Sample Thickness',
-    #         },
-    #     }
+        # Set strings for plot title and labels
+        plotstrings = {
+            'Acetylene Black': {
+                'xlabel': 'wt% Acetylene Black',
+                'titlelabel': 'Acetylene Black fraction',
+            },
+            'PVDF-HFP': {
+                'xlabel': 'wt% PVDF-HFP',
+                'titlelabel': 'PVDF-HFP fraction',
+            },
+            'activematerial': {
+                'xlabel': 'wt% ' + activematerial,
+                'titlelabel': activematerial + ' fraction',
+            },
+            'solidphase': {
+                'xlabel': 'wt% Solid Phase',
+                'titlelabel': 'Solid Phase',
+            },
+            'thickness': {
+                'xlabel': 'Sample Thickness (mm)',
+                'titlelabel': 'Sample Thickness',
+            },
+        }
 
-    #     res_par_mean = sortedtable['res_par_mean']
-    #     res_par_std = sortedtable['res_par_std']
-    #     res_perp_mean = sortedtable['res_perp_mean']
-    #     res_perp_std = sortedtable['res_perp_std']
+        res_par_mean = sortedtable['res_par_mean']
+        res_par_std = sortedtable['res_par_std']
+        res_perp_mean = sortedtable['res_perp_mean']
+        res_perp_std = sortedtable['res_perp_std']
 
-    #     # Plotting mumbo-jumbo
-    #     font = {'family': 'Arial', 'size': 14}
-    #     matplotlib.rc('font', **font)
+        labels = sortedtable['n_samples']
 
-    #     fig, ax = plt.subplots()
+        # Plotting mumbo-jumbo
+        font = {'family': 'Arial', 'size': 24}
+        matplotlib.rc('font', **font)
 
-    #     ax.errorbar(
-    #         sortedtable[xaxis], res_par_mean, yerr=res_par_std,
-    #         color='b', marker='.', markersize=8,
-    #         capsize=10, elinewidth=2, label='parallel')
-    #     ax.errorbar(
-    #         sortedtable[xaxis], res_perp_mean, yerr=res_perp_std,
-    #         color='g', marker='.', markersize=8,
-    #         capsize=10, elinewidth=2, label='perpendicular')
-    #     ax.legend()
+        fig, ax = plt.subplots(figsize=(18,10), dpi=100)
 
-    #     figtitle = electrode + ' resistivity by ' + plotstrings[xaxis]['titlelabel']
+        ax.errorbar(
+            sortedtable[xaxis], 
+            res_par_mean, 
+            yerr=res_par_std,
+            color=par_color, 
+            marker='.', 
+            markersize=8, 
+            linewidth=3,
+            capsize=10, 
+            elinewidth=3, 
+            markeredgewidth=3, 
+            label='Parallel'
+        )
 
-    #     ax.set_xlabel(plotstrings[xaxis]['xlabel'])
-    #     ax.set_ylabel(r'$Resistivity, \Omega-m$')
-    #     ax.set_title(figtitle)
-    #     ax.grid()
+        ax.errorbar(
+            sortedtable[xaxis], 
+            res_perp_mean, 
+            yerr=res_perp_std,
+            color=perp_color, 
+            marker='.', 
+            markersize=8, 
+            linewidth=3,
+            capsize=10, 
+            elinewidth=3, 
+            markeredgewidth=3, 
+            label='Perpendicular'
+        )
 
-    #     ymin, ymax = ax.get_ylim()
-    #     ydelta = (ymax-ymin)
-    #     ax.set_ylim([ymin, ydelta*1.1])
+        ax.legend()
+        ax.set_xlabel(plotstrings[xaxis]['xlabel'])
+        ax.set_ylabel('Resistivity, ' + r'$\Omega-m$')
 
-    #     par_height, perp_height = [], []
-    #     for mean, std in zip(res_par_mean, res_par_std):
-    #         par_height.append(mean+std)
-    #     for mean, std in zip(res_perp_mean, res_perp_std):
-    #         perp_height.append(mean+std)
+        ymin, ymax = ax.get_ylim()
+        ydelta = (ymax-ymin)
+        ax.set_ylim([0, ydelta*1.1])
 
-    #     textheights = []
-    #     for par, perp in zip(par_height, perp_height):
-    #         textheights.append(max(par, perp) + ydelta*0.025)
+        heights = [max(par_mean+par_std, perp_mean+perp_std) 
+            for par_mean, par_std, perp_mean, perp_std 
+            in zip(res_par_mean, res_par_std, res_perp_mean, res_perp_std)]
 
-    #     labels = sortedtable['n_samples']
+        for xval, height, label in zip(sortedtable[xaxis], heights, labels):
+            ax.text(xval, height + 0.05*ydelta, 'n=' + str(label), 
+                ha='center', va='bottom', fontsize=20)
 
-    #     for xval, height, label in zip(sortedtable[xaxis], textheights, labels):
-    #         ax.text(xval, height, 'n=' + str(label), ha='center', va='bottom', fontsize=12)
+        # if title:
+        #     ax.set_title(title)
+        # else:
+        #     ax.set_title(electrode + ' resistivity by ' + plotstrings[xaxis]['titlelabel'])
 
-    #     if save:
-    #         plt.savefig(electrode + xaxis + '.pdf', format='pdf')
+        plt.tight_layout()
 
-    #     plt.show()
+        if save:
+            if savename:
+                plt.savefig(savename + '.png')
+            else:
+                plt.savefig(electrode + xaxis + '.png')
 
-    def plot_resistivity(self, parallel=False, perpendicular=False, inknames=None, xaxis=None, 
-        title=None, show=False, save=False, savename=None, imagetype='png'):
+        if show:
+            plt.show()
+
+
+    def plot_resistivity_bar(self, inknames=None, xaxis=None, show=False, save=False):
         ''' Plots resistivity as a function of specified x-axis
             'AB', 'PVDF-HFP', 'activematerial', 'solidphase', 'thickness' 
             Must specify inknames to include in plot via 'inknames' kwarg '''
@@ -384,69 +415,76 @@ class resistivity:
         labels = sortedtable['n_samples']
 
         # Plotting mumbo-jumbo
-        font = {'family': 'Arial', 'size': 32}
+        font = {'family': 'Arial', 'size': 24}
         matplotlib.rc('font', **font)
 
-        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+        fig, ax = plt.subplots(figsize=(18,10), dpi=75)
+        width = 0.15
 
-        if parallel:
-            ax.errorbar(
-                sortedtable[xaxis], res_par_mean, yerr=res_par_std,
-                color='r', marker='.', markersize=8, linewidth=3,
-                capsize=10, elinewidth=3, markeredgewidth=3, label='parallel')
-            
-            par_height = []
-            for mean, std in zip(res_par_mean, res_par_std):
-                par_height.append(mean+std*1.2)
+        switch = 0
+        # labels = []
 
-            # par_textheights = []
-            # for par in par_height:
-            #     par_textheights.append(par + ydelta*0.025)
+        rect_par = ax.bar(
+            sortedtable[xaxis] - width/2, 
+            res_par_mean,
+            width, 
+            yerr=res_par_std,
+            color='#6699ff',
+            label='Parallel'
+        )
 
-            for xval, height, label in zip(sortedtable[xaxis], par_height, labels):
-                ax.text(xval, height, 'n=' + str(label), ha='center', va='bottom', fontsize=24)
+        for xpos, mean, std in zip(sortedtable[xaxis], res_par_mean, res_par_std):
+            ax.text(
+                xpos - width/2,
+                mean + std,
+                # '%d \n'%par_avg + r'$\pm$' +'%d'%par_std,
+                '%d '%mean + r'$\pm$' +' %d'%std,
+                ha='center',
+                va='bottom',
+                rotation=80,
+                fontsize=18,
+            )
 
-        if perpendicular:
-            ax.errorbar(
-                sortedtable[xaxis], res_perp_mean, yerr=res_perp_std,
-                color='b', marker='.', markersize=8, linewidth=3,
-                capsize=10, elinewidth=3, markeredgewidth=3, label='perpendicular')
+        rect_perp = ax.bar(
+            sortedtable[xaxis] + width/2, 
+            res_perp_mean,
+            width, 
+            yerr=res_perp_std,
+            color='#0000ff',
+            label='Perpendicular'
+        )
 
-            perp_height = []
-            for mean, std in zip(res_perp_mean, res_perp_std):
-                perp_height.append(mean+std*1.2)
+        for xpos, mean, std in zip(sortedtable[xaxis], res_perp_mean, res_perp_std):
+            ax.text(
+                xpos + width/2,
+                mean + std,
+                # '%d \n'%par_avg + r'$\pm$' +'%d'%par_std,
+                '%d '%mean + r'$\pm$' +' %d'%std,
+                ha='center',
+                va='bottom',
+                rotation=80,
+                fontsize=18,
+            )
 
-            # perp_textheights = []
-            # for perp in perp_height:
-            #     perp_textheights.append(max(perp) + ydelta*0.025)
+        if not switch:
+            ax.legend()
+            switch +=1
 
-            for xval, height, label in zip(sortedtable[xaxis], perp_height, labels):
-                ax.text(xval, height, 'n=' + str(label), ha='center', va='bottom', fontsize=24)
+        xticks = sortedtable[xaxis]
+        xlabels = sortedtable[xaxis]
+
+        plt.xticks(xticks, xlabels)
+
+        # ax.set_ylim([0, 17500])
+        # ax.set_ylim([0, 21500])
 
         ax.set_xlabel(plotstrings[xaxis]['xlabel'])
         ax.set_ylabel(r'$Resistivity, \Omega-m$')
-        # ax.grid()
-
-        ymin, ymax = ax.get_ylim()
-        ydelta = (ymax-ymin)
-        ax.set_ylim([0, ydelta*1.1])
-        # ax.set_xlim(xmin=0)
-
-        if title:
-            ax.set_title(title)
-        else:
-            ax.set_title(electrode + ' resistivity by ' + plotstrings[xaxis]['titlelabel'])
-
-        if show:
-            plt.show()
 
         if save:
-            if savename:
-                plt.savefig(savename + '.' + imagetype)
-            else:
-                plt.savefig(electrode + xaxis + '.' + imagetype)
-
-
+            plt.savefig(electrode + xaxis + '.png')
+        if show:
+            plt.show()
 
 
     def plot_thickness(self, inkname=None, date=None, save=False):
@@ -483,6 +521,211 @@ class resistivity:
             plt.savefig('thickness_' + inkname + '_' + date + '.pdf', format='pdf')
 
         plt.show()
+
+
+class cc_resistivity:
+
+    ''' Analyzes sheet resistance and conductivity data
+        Measured and recorded by hand into custom Excel spreadsheet '''
+
+    def __init__(self, filename):
+        ''' Loads datasheets and organizes in dictionary '''
+
+        # Assumes csv with column order of 
+        # 'Ink Name', 'Sample Number', 'Thickness (mm)', 
+        # 'R_perp (Ωm)', 'R_par (Ωm)'
+
+        # Instantiate dict for indices within row (agnostic to export order)
+        idxs = {}
+        self.data = {}
+
+        reader = csv.reader(open(filename, errors='replace'), delimiter=',')
+        rows = list(reader)
+
+        headers = {
+            'Thickness (mm)': 'thickness',
+            'R_perp (Ωm)': 'r_perp',
+            'R_par (Ωm)': 'r_par',
+            'C_perp (S/m)': 'c_perp',
+            'C_par (S/m)': 'c_par',
+        }
+
+        for index, row in enumerate(rows):
+            if index == 0:
+                for header in headers:
+                    if header in row:
+                        idxs[headers[header]] = row.index(header)
+
+            if index > 0:
+                inkname = row[0]
+                # samplenum = row[1]
+                # thickness = row[2]
+                # r_perp = row[3]
+                # r_par = row[4]
+
+                freq = int(inkname[0:2])
+                ball = int(inkname[2:4])
+                time = int(inkname[5:])
+
+                if freq not in self.data:
+                    self.data[freq] = {}
+
+                if ball not in self.data[freq]:
+                    self.data[freq][ball] = {}
+
+                if time not in self.data[freq][ball]:
+                    self.data[freq][ball][time] = {
+                        headers[header]: [] for header in headers
+                    }
+
+                # sample = {headers[header]: [] for header in headers}
+
+                for header in headers:
+                    try:
+                        self.data[freq][ball][time][headers[header]].append(
+                            float(row[idxs[headers[header]]]))
+                    except ValueError:
+                        self.data[freq][ball][time][headers[header]].append(
+                            float('nan'))
+
+        for freq in self.data:
+            for ball in self.data[freq]:
+                for time in self.data[freq][ball]:
+                    # with self.data[freq][ball][time] as sample:
+                    self.data[freq][ball][time]['thickness_avg'] = \
+                        np.nanmean(self.data[freq][ball][time]['thickness'])
+                    self.data[freq][ball][time]['thickness_std'] = \
+                        np.nanstd(self.data[freq][ball][time]['thickness'])
+                    self.data[freq][ball][time]['r_perp_avg'] = \
+                        np.nanmean(self.data[freq][ball][time]['r_perp'])
+                    self.data[freq][ball][time]['r_perp_std'] = \
+                        np.nanstd(self.data[freq][ball][time]['r_perp'])
+                    self.data[freq][ball][time]['r_par_avg'] = \
+                        np.nanmean(self.data[freq][ball][time]['r_par'])
+                    self.data[freq][ball][time]['r_par_std'] = \
+                        np.nanstd(self.data[freq][ball][time]['r_par'])
+                    self.data[freq][ball][time]['c_perp_avg'] = \
+                        np.nanmean(self.data[freq][ball][time]['c_perp'])
+                    self.data[freq][ball][time]['c_perp_std'] = \
+                        np.nanstd(self.data[freq][ball][time]['c_perp'])
+                    self.data[freq][ball][time]['c_par_avg'] = \
+                        np.nanmean(self.data[freq][ball][time]['c_par'])
+                    self.data[freq][ball][time]['c_par_std'] = \
+                        np.nanstd(self.data[freq][ball][time]['c_par'])
+
+
+    def plot_conductivity_bar(self, show=False, save=False):
+
+        ''' Plots bar graphs of conductivities
+            Intended for three separate figures organized in heirarchy of 
+            Frequency >> ball size >> milling time '''
+
+        # Plotting formatting
+        font = {'family': 'Arial', 'size': 24}
+        matplotlib.rc('font', **font)
+
+        timenum = 3
+        ballnum = 4
+
+        for freq in sorted(self.data.keys()):
+            fig, ax = plt.subplots(figsize=(18,10), dpi=75)
+            width = 0.5
+
+            # # each direction gets 1/2 a unit, space between each ball size
+            # # gets one fill unit
+            # ind = np.arange((3+1)*(4))
+
+            switch = 0
+            labels = []
+
+            for idb, ball in enumerate(sorted(self.data[freq].keys()), 1):
+                for idt, time in enumerate(sorted(self.data[freq][ball].keys()), 1):
+                    x_loc = 1 + (ballnum*(idb-1) + idt)
+
+                    x_loc_par = x_loc - width/2
+                    x_loc_perp = x_loc + width/2
+
+                    par_avg = self.data[freq][ball][time]['c_par_avg']
+                    par_std = self.data[freq][ball][time]['c_par_std']
+                    perp_avg = self.data[freq][ball][time]['c_perp_avg']
+                    perp_std = self.data[freq][ball][time]['c_perp_std']
+
+
+                    rect_par = ax.bar(
+                        x_loc_par, 
+                        par_avg,
+                        width, 
+                        yerr=par_std,
+                        color='#6699ff',
+                        label='Parallel'
+                    )
+
+                    rect_perp = ax.bar(
+                        x_loc_perp, 
+                        perp_avg,
+                        width, 
+                        yerr=perp_std,
+                        color='#0000ff',
+                        label='Perpendicular'
+                    )
+
+                    ax.text(
+                        x_loc_par,
+                        par_avg + par_std + 500,
+                        # '%d \n'%par_avg + r'$\pm$' +'%d'%par_std,
+                        '%d '%par_avg + r'$\pm$' +' %d'%par_std,
+                        ha='center',
+                        va='bottom',
+                        rotation=80,
+                        fontsize=18,
+                    )
+
+                    ax.text(
+                        x_loc_perp,
+                        perp_avg + perp_std + 500,
+                        # '%d \n'%perp_avg + r'$\pm$' +'%d'%perp_std,
+                        '%d '%perp_avg + r'$\pm$' +' %d'%perp_std,
+                        ha='center',
+                        va='bottom',
+                        rotation=80,
+                        fontsize=18,
+                    )
+
+                    if not switch:
+                        ax.legend()
+                        switch +=1
+
+                    if idt == 2:
+                        labels.append((x_loc, '%sh \n %smm' %(time, ball)))
+                    else:
+                        labels.append((x_loc, '%sh' %time))
+
+            # for xval, height, label in zip(sortedtable[xaxis], par_height, labels):
+            #     ax.text(xval, height, 'n=' + str(label), ha='center', va='bottom', fontsize=24)
+
+            xticks = [label[0] for label in labels]
+            xlabels = [label[1] for label in labels]
+
+            plt.xticks(xticks, xlabels)
+
+            # ax.set_ylim([0, 17500])
+            ax.set_ylim([0, 21500])
+
+            # ax.set_xlabel('Balls and Times')
+            ax.set_ylabel('Conductivity [S/m]')
+            ax.set_title('%s Hz'%freq)
+
+            if save:
+                plt.savefig('Niballmilling_%sHz.png'%freq)
+            if show:
+                plt.show()
+
+
+
+
+
+
+
 
 
 

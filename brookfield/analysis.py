@@ -189,7 +189,23 @@ class viscosity:
         shearrate = np.array(self.data['shearrate'])
         shearstress = np.array(self.data['shearstress'])
 
-        coefs = np.polyfit(x=shearrate, y=shearstress, deg=1, w=shearrate)
+        mask = np.isfinite(shearstress)
+
+        if False not in mask:
+            pass
+        else:
+            end = np.where(mask==False)[0][0]
+            new = np.zeros(len(mask), dtype=bool)
+            new[0:end] = True
+            new[end:] = False
+            mask = new
+
+        coefs = np.polyfit(
+            x=shearrate[mask], 
+            y=shearstress[mask], 
+            deg=1, 
+            w=shearrate[mask],
+        )
 
         self.data['yieldstress'] = coefs[1]
 
@@ -230,84 +246,59 @@ class viscosity_batch:
     '''
 
 
-    def __init__(self, files=None):
+    def __init__(self, files=None, inkrename=None):
         ''' 
         Initializes files according 'profile'
         '''
 
         # Acceptes lists of filenames
         self.alldata = {}
+        self.labels = {}
         titles = []
+        inknames = []
         plotinfo = []
 
         first = True
         for file in files:
             exported = viscosity(file)
-            exported.calculate_yield_stress(save=True)
+            exported.calculate_yield_stress(save=False)
 
-            title, sampleidx = utilities.title_search_format(
+            title, inkname, sampleidx = utilities.title_search_format(
                 filename=file, include=['ballmilling'])
 
-            # title, sampleidx = self.title_search_format(filename=file)
+            inknames.append(inkname)
 
-            self.alldata[sampleidx] = exported.data
+            try:
+                self.alldata[inkname]
+            except KeyError:
+                self.alldata[inkname] = {}
+
+            self.alldata[inkname][sampleidx] = exported.data
             titles.append(title)
 
             if first:
                 self.plotinfo = exported.plotinfo
                 first = False
 
+        inknames = set(inknames)
+
+        for inkname in inknames:
+            if inkrename:
+                self.labels[inkname] = inkrename[inkname]
+            else:
+                self.labels[inkname] = inkname
+
         # If titles are identical, groovy
         # Otherwise, print error
-        self.title = titles[0]
-
-        if len(set(titles)) is not 1:
-            print('Titles do not match!!')
-
-
-    # def title_search_format(self, filename):
-    #     ''' 
-    #     Searches filenames for batch 
-    #     processing
-    #     Returns formatted title with constant sample parameters for 
-    #     batch plotting and sample idx
-    #     '''
-
-    #     # Searches filename for ball milling parameters, ink name, and 
-    #     # casting direction
-    #     inkmatch = re.search(r'[A-Z]{3}\d{1}[a-z]{1}\d{2}', filename)
-    #     paramsmatch = re.search(r'[0-9]{6}(S)?', filename)
-    #     Nmatch = re.search(r'S\d{1,2}', filename)
-
-    #     # Only used for initial qualification of ball mill jars
-    #     isoldmatch = re.search(r'old', filename)
-    #     isTEGmatch = re.search(r'TEG', filename)
-
-    #     # Determines order of elements in title
-    #     titlematches = [inkmatch, paramsmatch]
-
-    #     # Instantiate title
-    #     title = ''
-
-    #     # Check and assign sample number
-    #     sampleidx = Nmatch.group(0)
-
-    #     # Reconstruct the title in the right order, regardless of 
-    #     # filename order
-    #     for match in titlematches:
-    #         if match is not None:
-    #             title = title + match.group(0)
-
-    #     if isoldmatch:
-    #         title = title + '_old_jars'
-    #     elif isTEGmatch:
-    #         title = title + '_TEG_jars'
-
-    #     return title, sampleidx
+        if len(inknames) > 1 or len(set(titles)) is not 1:
+            self.title = '_'.join(name for name in inknames)
+            print('More than one inktype!!')
+        else:
+            self.title = titles[0]
 
 
     def plot_batch(self, x=None, y=None, 
-        average=False, confidence=0.95, 
+        average=False, confidence=None, 
         xlim=None, ylim=None, title=None, 
         show=False, save=False, savename=None, imagetype='png'):
         ''' Plots multiple profiles on same plot
@@ -323,37 +314,83 @@ class viscosity_batch:
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
         if average:
-            data = [(self.alldata[sample][x], self.alldata[sample][y]) \
-                for sample in self.alldata]
+            for idx, inkname in enumerate(self.alldata):
+                data = [ (self.alldata[inkname][sample][x], \
+                    self.alldata[inkname][sample][y]) \
+                    for sample in self.alldata[inkname]
+                ]
 
-            indep, mean, std, lcl, ucl = utilities.batch_average_plot(data=data)
+                indep, mean, std, lcl, ucl = \
+                    utilities.batch_average_plot(data=data)
 
-            for sample in self.alldata:
-                ax.plot(self.alldata[sample][x], self.alldata[sample][y],
-                    linewidth=3, color='k', alpha=0.2)
+                if not confidence:
+                    ax.errorbar(
+                        indep,
+                        mean,
+                        yerr=std,
+                        color=plt.cm.tab10(coloridx[idx]),
+                        marker='.', 
+                        markersize=8, 
+                        linewidth=3,
+                        capsize=10, 
+                        elinewidth=3, 
+                        markeredgewidth=3, 
+                        label=inkname,
+                        )
+                else:
+                    ax.plot(
+                        self.alldata[sample][x], 
+                        self.alldata[sample][y],
+                        linewidth=3, 
+                        color='k', 
+                        alpha=0.2
+                    )
 
-            ax.plot(indep, mean, linewidth=3, color='r', label='mean')
-            ax.plot(indep, ucl, color='r', linewidth=3, linestyle='--',)
-            ax.plot(indep, lcl, color='r', linewidth=3, linestyle='--', 
-                label=str(confidence)[2:]+'% Confidence Interval (t-test)')
+                    ax.plot(
+                        indep, 
+                        mean, 
+                        linewidth=3, 
+                        color='r', 
+                        label='mean'
+                    )
+                    ax.plot(
+                        indep, 
+                        ucl, 
+                        color='r', 
+                        linewidth=3, 
+                        linestyle='--',
+                    )
+                    ax.plot(indep, 
+                        lcl, 
+                        color='r', 
+                        linewidth=3, 
+                        linestyle='--', 
+                        label=str(confidence)[2:]+ 
+                            '% Confidence Interval (t-test)'
+                    )
 
         else:
-            for idx, sample in enumerate(self.alldata):
-                x_plot = np.array(self.alldata[sample][x])
-                y_plot = np.array(self.alldata[sample][y])
+            idx = 0
 
-                if np.isnan(np.min(y_plot)):
-                    x_plot = x_plot.astype(np.double)
-                    y_plot = y_plot.astype(np.double)
-                    mask = np.isfinite(y_plot)
+            for inkname in self.data[inkname]:
+                for sample in self.alldata[inkname]:
+                    x_plot = np.array(self.alldata[inkname][sample][x])
+                    y_plot = np.array(self.alldata[inkname][sample][y])
 
-                    ax.plot(x_plot[mask], y_plot[mask],
-                        linewidth=3, color=plt.cm.tab10(coloridx[idx]),
-                        linestyle='--')
+                    if np.isnan(np.min(y_plot)):
+                        x_plot = x_plot.astype(np.double)
+                        y_plot = y_plot.astype(np.double)
+                        mask = np.isfinite(y_plot)
 
-                ax.plot(x_plot, y_plot,
-                    linewidth=3, color=plt.cm.tab10(coloridx[idx]), 
-                    marker='o', markersize=8, label=str(sample))
+                        ax.plot(x_plot[mask], y_plot[mask],
+                            linewidth=3, color=plt.cm.tab10(coloridx[idx]),
+                            linestyle='--')
+
+                    ax.plot(x_plot, y_plot,
+                        linewidth=3, color=plt.cm.tab10(coloridx[idx]), 
+                        marker='o', markersize=8, label=str(sample))
+
+                    idx += 1
 
         ax.set_xlabel(self.plotinfo[x]['label'])
         ax.set_ylabel(self.plotinfo[y]['label'])
@@ -384,7 +421,127 @@ class viscosity_batch:
         plt.close(fig)
 
 
+    def plot_batch_vis_shearstress(self, average=False, confidence=None, 
+        xlim=None, ylim=None, title=None, 
+        show=False, save=False, savename=None, imagetype='png'):
+        ''' Plots multiple profiles on same plot
+            Possible choices for both x and y are
+            'step', 'point', 'time', 'viscosity', 'torque', 'speed', 
+            'shearstress', 'shearrate', 'temperature', 'density', 'accuracy', 
+        '''
 
+        font = {'family': 'Arial', 'size': 24}
+        matplotlib.rc('font', **font)
+
+        coloridx = np.linspace(0,1,10) # for use with tab10 colormap
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18,10), dpi=100)
+
+        for yval, ax in zip(('viscosity', 'shearstress'), (ax1, ax2)):
+            if average:
+                for idx, inkname in enumerate(self.alldata):
+                    data = [ (self.alldata[inkname][sample]['shearrate'], \
+                        self.alldata[inkname][sample][yval]) \
+                        for sample in self.alldata[inkname]
+                    ]
+
+                    indep, mean, std, lcl, ucl = \
+                        utilities.batch_average_plot(data=data)
+
+                    mask = np.isfinite(mean)
+
+                    if not confidence:
+                        ax.errorbar(
+                            indep[mask],
+                            mean[mask],
+                            yerr=std[mask],
+                            color=plt.cm.tab10(coloridx[idx]),
+                            marker='.', 
+                            markersize=8, 
+                            linewidth=3,
+                            capsize=10, 
+                            elinewidth=3, 
+                            markeredgewidth=3, 
+                            label=self.labels[inkname],
+                            )
+                    else:
+                        ax.plot(
+                            self.alldata[sample]['shearrate'], 
+                            self.alldata[sample][yval],
+                            linewidth=3, 
+                            color='k', 
+                            alpha=0.2
+                        )
+
+                        ax.plot(
+                            indep, 
+                            mean, 
+                            linewidth=3, 
+                            color='r', 
+                            label='mean'
+                        )
+                        ax.plot(
+                            indep, 
+                            ucl, 
+                            color='r', 
+                            linewidth=3, 
+                            linestyle='--',
+                        )
+                        ax.plot(indep, 
+                            lcl, 
+                            color='r', 
+                            linewidth=3, 
+                            linestyle='--', 
+                            label=str(confidence)[2:]+ 
+                                '% Confidence Interval (t-test)'
+                        )
+
+            else:
+                idx = 0
+
+                for inkname in self.data[inkname]:
+                    for sample in self.alldata[inkname]:
+                        x_plot = np.array(
+                            self.alldata[inkname][sample]['shearrate'])
+                        y_plot = np.array(self.alldata[inkname][sample][yval])
+
+                        if np.isnan(np.min(y_plot)):
+                            x_plot = x_plot.astype(np.double)
+                            y_plot = y_plot.astype(np.double)
+                            mask = np.isfinite(y_plot)
+
+                            ax.plot(x_plot[mask], y_plot[mask],
+                                linewidth=3, color=plt.cm.tab10(coloridx[idx]),
+                                linestyle='--')
+
+                        ax.plot(x_plot, y_plot,
+                            linewidth=3, color=plt.cm.tab10(coloridx[idx]), 
+                            marker='o', markersize=8, label=str(sample))
+
+                        idx += 1
+
+            ax.set_xlabel(self.plotinfo['shearrate']['label'])
+            ax.set_ylabel(self.plotinfo[yval]['label'])
+            ax.legend()
+            # ax.grid()
+
+        if title:
+            plt.suptitle(title)
+        else:
+            plt.suptitle('batch_viscosity_shearstress_' + self.title)
+
+        plt.tight_layout()
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('batch_viscosity_shearstress_' \
+                    + self.title + '.' + imagetype)
+
+        if show:
+            plt.show()
+
+        plt.close(fig)
 
 
 

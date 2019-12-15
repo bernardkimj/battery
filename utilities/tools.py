@@ -7,6 +7,8 @@
 '''
 
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
 import re
 import csv
 from operator import itemgetter
@@ -62,7 +64,6 @@ class utilities:
                 ucl.append(R[1])
 
         return indep, mean, std, lcl, ucl
-
 
     def title_search_format(filename, include=None):
         ''' 
@@ -157,8 +158,9 @@ class utilities:
                 #         title = title + match.group(0) + '_'
 
         title = title[:-1] # cut off last underscore
-        return title, sampleidx
+        inkname = ink.group(0)
 
+        return title, inkname, sampleidx
 
     def title_search_echem(filename, test=None):
         '''
@@ -193,6 +195,30 @@ class utilities:
 
         return allmatches
 
+    def plot_setup(item, params):
+
+        # Plotting formatting
+        font = {'family': 'Arial', 'size': 20}
+        matplotlib.rc('font', **font)
+
+        fig, ax = plt.subplots(figsize=(16,9), dpi=75)
+
+        if params['xlim']:
+            ax.set_xlim(params['xlim'])
+        if params['ylim']:
+            ax.set_ylim(params['ylim'])
+
+        if params['title']:
+            ax.set_title(params['title'])
+        else:
+            title = item.title + params['titletag']
+            ax.set_title(title)
+
+        ax.set_xlabel(params['xlabel'])
+        ax.set_ylabel(params['ylabel'])
+        ax.grid()
+
+        return fig, ax
 
     def save_json(data, filename=None):
         ''' Creates .json file to save desireable metrics
@@ -208,18 +234,15 @@ class utilities:
         with open(filename, 'w') as f:
             f.write(output)
 
-
     def read_json(filename=None):
         ''' Reads and saves .json file
             Converts back into dictionary (if saved as dictionary)
-
         '''
 
         with open(filename) as f:
             data = json.load(f)
 
         return data
-
 
     def get_init_concentrations(title=None, mass=1, test=None):
 
@@ -260,16 +283,14 @@ class utilities:
 
         return mol_Zn, molal_Zn
 
-
-    def window_gradient(x, y, bounds, slope, lsq=False):
+    def window_gradient(x, y, bounds, slope, windownum=50, positionnum=50, 
+        lsq=False):
         ''' Applies a window-gradient algorithm to find optimal linear fit
             Provide x, y data, window size boundaries, sign of slope to find
             bounds is a tuple (small, large) that specifies window size
             Returns coefficients of optimal linear fit
         '''
 
-        windownum = 50 # number of windows to iterate through
-        positionnum = 50 # number of positions to iterate through
         linear_tol = 0.05 # tolerance value for linear residual fit
 
         lbound = np.round(min(bounds)*len(x)) # smallest window size
@@ -319,7 +340,67 @@ class utilities:
 
         return(line_coefs)
 
+    def moving_average(interval, size, weight=None):
+        ''' Calculates moving average to smooth noise from data 
+            Choose weighting option based on kwarg 'weight'
+            Based on convolution, so weights must be centered on window
+            'size' is desired fraction of interval to be considered for smoothing
+            '''
 
+        n = int(np.ceil(len(interval)*size))
+
+        if weight == None or weight == 'unweighted':
+            window = np.ones(n)/n
+        # Weighting for linear and exp weights is not properly centered, 
+        # sample average is biased towards future numbers
+        elif weight == 'linear':
+            window = np.arange(1,n+1)/(n*(n+1)/2)
+        elif weight == 'exp':
+            alpha = 2/(n+1)
+            coeffs = np.zeros(n)
+
+            for idx, coeff in enumerate(coeffs):
+                coeffs[idx] = (1 - alpha)**idx
+
+            window = coeffs/np.sum(coeffs)
+
+        smoothed = np.convolve(interval, window, 'valid')
+
+        overhang = len(interval) - len(smoothed)
+        frontpad = int(np.ceil(overhang/2))
+        endpad = int(np.floor(overhang/2))
+        idxs = (frontpad, len(interval)-endpad)
+
+        return smoothed, idxs
+
+    def check_forward_monotonicity(series, type, length):
+        ''' Checks if list-type object is monotonically increasing 
+            or decreasing over a specified length
+            type accepts 'increasing' or decreasing'
+            series must be 1D list-type object
+            length accepts integer value
+            returns boolean truth value
+        '''
+
+        checklen = length
+        checklist = []
+
+        for idc in range(1, checklen+1):
+            if type == 'increasing':
+                if (series[idc] > series[idc-1]):
+                    checklist.append(True)
+                else:
+                    checklist.append(False)
+            elif type == 'decreasing':
+                if (series[idc] < series[idc-1]):
+                    checklist.append(True)
+                else:
+                    checklist.append(False)
+
+        if np.sum(checklist) == checklen:
+            return True
+        else:
+            return False
 
 
     def reduce_file_LEGACY(self):

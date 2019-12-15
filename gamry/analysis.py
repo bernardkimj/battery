@@ -8,10 +8,12 @@ University: University of California, Berkeley
 
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 import numpy as np
 import csv
 import re
 import bisect
+from scipy import optimize
 from decimal import Decimal
 from battery.utilities import utilities
 
@@ -27,7 +29,7 @@ class EIS:
 
     '''
 
-    def __init__(self, filename=None, thickness=0.0365, area=1, zscale='k'):
+    def __init__(self, filename=None, thickness=None, area=1, zscale='k'):
         ''' Opens file and retrieves data.
 
         Retrieves time, frequency, real impedance, imaginary impedance,
@@ -47,7 +49,10 @@ class EIS:
         self.zscalestr, self.zscaleval = self.get_zscale(zscale)
 
         titlesearch = re.search(r'EXDTA_.*_S\d{1,2}', self.filename)
-        self.title = titlesearch.group(0)[6:]
+        try:
+            self.title = titlesearch.group(0)[6:]
+        except AttributeError:
+            self.title = self.filename[:-4]
 
         self.time = []
         self.freq = []
@@ -82,7 +87,9 @@ class EIS:
         self.magn = [magnraw/self.zscaleval for magnraw in self.magnraw]
 
         self.find_r_solution()
-        self.conductivity = (self.thickness*1000)/(self.area*self.r_solution)
+
+        if self.thickness:
+            self.conductivity = (self.thickness*1000)/(self.area*self.r_solution)
 
     def is_num(self, s):
         try:
@@ -132,8 +139,8 @@ class EIS:
         fig, ax = plt.subplots(figsize=(12,9), dpi=75)
 
         ax.plot(self.real, self.imag, color='b', linewidth=2,
-            label=r'$R_{solution}$' + ' = ' + '%.2f'%self.r_solution + ' Ω' + 
-            '\n' + r'$\sigma$' + ' = ' + '%0.2f'%self.conductivity + ' S')
+            label=r'$R_{solution}$' + ' = ' + '%.2f'%self.r_solution + ' Ω')
+             # + '\n' + r'$\sigma$' + ' = ' + '%0.2f'%self.conductivity + ' S')
 
         if xlim:
             ax.set_xlim(xlim)
@@ -193,6 +200,7 @@ class EIS:
         ax_phase.set_xlabel('Frequency [Hz]')
         ax_magn.grid()
         ax_phase.grid()
+        ax.set_aspect('equal', adjustable='datalim')
 
         if show:
             plt.show()
@@ -201,6 +209,144 @@ class EIS:
             plt.savefig(self.title + '_bode' + '.' + str(imagetype))
 
         plt.close(fig)
+
+    def get_nyquist_fit(self):
+        ''' Calculates circular fit of Nyquist plot
+            For determining r_sol and r_ct
+        '''
+
+        # Find where high frequency behavior ends as inclusion 
+        # messes up circular fit later
+        hfend = False
+        checklen = 10 # forward length of series to check for monotonicity
+
+        # Check real and imaginary vectors until both are monotonically 
+        # increasing over checked length
+        # Point where future points for both vectors are monotonically 
+        # increasing is where high frequency region ends
+        for idx, real in enumerate(self.real[:-1]):
+            if not hfend:
+                realcheck = utilities.check_forward_monotonicity(
+                    series=self.real[idx:],
+                    type='increasing',
+                    length=checklen
+                )
+                imagcheck = utilities.check_forward_monotonicity(
+                    series=self.imag[idx:],
+                    type='increasing',
+                    length=checklen
+                )
+
+                if realcheck == True and imagcheck == True:
+                    hfend = idx
+
+        # Take derivative of remaining region
+        d1 = []
+
+        for idx in range(hfend, len(self.real[:-1])):
+            delta_x = self.real[idx+1] - self.real[idx]
+            delta_y = self.imag[idx+1] - self.imag[idx]
+            d1.append(delta_y/delta_x)
+
+        # plt.plot(list(range(len(d1))), d1)
+        # plt.show()
+
+        # Apply smoothing algorithm to derivative in order to smooth out 
+        # local minima
+        smoothsize = 0.15
+        d1s, idxs = utilities.moving_average(
+            interval=d1, size=smoothsize, weight=None)
+        pad = idxs[0] # front pad size after smoothing
+
+        # Find point in smoothed derivative where derivative is maximum
+        d1s_max = np.where(np.array(d1s) == np.max(d1s))[0][0]
+
+        # Now find minimum of smoothed derivative to find where curvature 
+        # changes
+        d1s_min = False
+
+        # Forward length to check for monotonic decrease
+        d1check = 15
+
+        for idx, m in enumerate(d1s[d1s_max:-d1check-1],d1s_max):
+            if not d1s_min:
+                mincheck = utilities.check_forward_monotonicity(
+                    series=d1s[idx:],
+                    type='decreasing',
+                    length=d1check
+                )
+
+                # Find where next point after monotonic decrease increases
+                # This is where curvature change is
+                if mincheck == True and d1s[idx+d1check] < d1s[idx+d1check+1]:
+                    d1s_min = idx+d1check
+
+        # If increase never happens, then minimum is just endpoint of vector
+        if not d1s_min:
+            d1s_min = len(d1s)+(len(d1)-idxs[1])
+
+        # Add back missing lengths from high frequency identification and 
+        # smoothing
+        bounds = (d1s_max+pad+hfend, d1s_min+pad+hfend)
+
+        # plt.plot(list(range(pad+hfend, pad+hfend+len(d1s))), d1s)
+        # plt.axvline(d1s_max+pad+hfend, color='k')
+        # plt.axvline(d1s_min+pad+hfend, color='k')
+        # plt.show()
+
+        # plt.plot(self.real, self.imag)
+        # plt.axvline(self.real[bounds[0]], color='k')
+        # plt.axvline(self.real[bounds[1]], color='k')
+        # plt.show()
+
+        real = self.real[bounds[0]:bounds[1]]
+        imag = self.imag[bounds[0]:bounds[1]]
+
+        # Adopted from Scipy cookbook
+        # https://scipy-cookbook.readthedocs.io/items/Least_Squares_Circle.html
+        def calc_R(x, y, xc, yc):
+            '''
+            Calculate the distance of each point from the center (xc, yc)
+            '''
+
+            return np.sqrt((x-xc)**2 + (y-yc)**2)
+
+        def f(c, x, y):
+            '''
+            Calcualte algebraic distance between the data points and 
+            the mean circle centered at c=(xc, yc)
+            '''
+
+            Ri = calc_R(x, y, *c)
+            return Ri - Ri.mean()
+
+        real_m = np.mean(imag)
+        imag_m = 0
+        center_estimate = real_m, imag_m
+
+        center = optimize.least_squares(
+            fun=f, x0=center_estimate, args=(real,imag), 
+            bounds=([-np.inf, 0], np.inf),
+        )
+
+        xc, yc = center.x
+        Ri = calc_R(real, imag, *center.x)
+        R = Ri.mean()
+        residual = np.sum((Ri - R)**2)
+
+        self.xc, self.yc = xc, yc
+        self.nyquist_R = R
+
+        # theta_fit = np.linspace(0, np.pi, 180)
+        # x_fit = xc + R*np.cos(theta_fit)
+        # y_fit = yc + R*np.sin(theta_fit)
+
+        # print(R)
+
+        # plt.plot(self.real, self.imag)
+        # plt.plot(x_fit, y_fit)
+
+        # plt.show()
 
 
 class CV:
@@ -265,6 +411,8 @@ class CV:
                     raise
 
         self.title = filename[:-4]
+
+        self.get_charges()
 
 
     def is_num(self, s):
@@ -347,14 +495,21 @@ class CV:
                 for cycle in self.cycles}
             correctedstr = ''
 
-        if cycle_index:
+        if cycle_index == 'all':
+            for cycle in self.cycles:
+                ax.plot(voltage[cycle],
+                    self.cycles[cycle]['current'],
+                    linewidth=3,
+                    color=plt.cm.inferno(coloridx[cycle-1]),
+                    label = 'Cycle '+str(cycle)
+                )
+        elif cycle_index:
             for cycle in cycle_index:
                 ax.plot(voltage[cycle],
                         self.cycles[cycle]['current'],
                         linewidth=3,
                         color=plt.cm.inferno(coloridx[cycle-1]),
                         label = 'Cycle '+str(cycle))
-            ax.legend()
         else:
             for cycle in self.cycles:
                 if cycle == min(self.cycles) or cycle == max(self.cycles) \
@@ -370,7 +525,8 @@ class CV:
                         linewidth=3,
                         color=plt.cm.inferno(coloridx[cycle-1]),
                         )
-            ax.legend()
+
+        ax.legend()
 
         ax.set_xlabel('Potential, vs Zn/Zn$^{2+}$ [V]')
         ax.set_ylabel('Current [mA/cm$^2$]')
@@ -399,221 +555,400 @@ class CV:
         plt.close(fig)
 
 
-    def extrema_smoothed_wd(self, save_json=False, showplot=False, 
-        saveplot=False):
+    # def extrema_smoothed_wd(self, save_json=False, showplot=False, 
+    #     saveplot=False):
+    #     ''' Extracts maximum and minumum points on each CV curve for each cycle
+    #         Uses gradient-window (g-w) method on smoothed curves
+    #         Written by Bernard Kim '''
+
+    #     # # removes last element of self.cycles (incomplete cycles)
+    #     # del self.cycles[max(self.cycles)]
+
+    #     voltagethresh = 2 # positive and negative hard voltage bounds
+    #     # as percent of scan length
+    #     smoothsize = 0.05 # size of smoothing window
+    #     lbsize = 0.01 # window lower bound size (for w-g)
+    #     ubsize = 0.10 # window upper bound size (for w-g)
+
+    #     allPairs = {}
+
+    #     for cycle in self.cycles:
+    #         voltages = self.cycles[cycle]['voltage']
+    #         currents = self.cycles[cycle]['current']
+    #         times = self.cycles[cycle]['time']
+
+    #         # Split voltage, current, and time lists into 
+    #         # cathodic and anodic scans
+    #         scan_switch = voltages.index(min(voltages))
+
+    #         cathodic = {
+    #             'V_raw': np.array(voltages[:scan_switch]),
+    #             'I_raw': np.array(currents[:scan_switch]),
+    #         }
+
+    #         anodic = {
+    #             'V_raw': np.array(voltages[scan_switch:]),
+    #             'I_raw': np.array(currents[scan_switch:]),
+    #         }
+
+    #         allPairs[cycle] = {}
+
+    #         # Smooth and run gradient-window algorithm on each scan separately
+    #         for scan in [cathodic, anodic]:
+
+    #             # Smooth current data using moving average
+    #             smoothing_window = round(smoothsize*len(scan['V_raw']))
+    #             scan['I_smoothed'] = self.moving_average(
+    #                 scan['I_raw'], smoothing_window)
+
+    #             # Extract corresponding smoothed voltage points to 
+    #             # smoothed current points
+    #             overhang = len(scan['I_raw']) - len(scan['I_smoothed'])
+    #             lower_pad = np.ceil(overhang/2)
+    #             upper_pad = np.floor(overhang/2)
+    #             scan['V_smoothed'] = scan['V_raw'][
+    #                 int(lower_pad):int(-upper_pad)]
+
+    #             # Set window size as a function of smoothed scan data length
+    #             lowerbound = round(lbsize*len(scan['V_smoothed']))
+    #             upperbound = round(ubsize*len(scan['V_smoothed']))
+    #             # 1/2 window size, symmetric positive and negative offsets
+    #             # index of center of window
+    #             windows = list(range(lowerbound,upperbound))
+
+    #             totalExtrema = [[] for window in windows]
+
+    #             for window in windows:
+    #                 # Create list of valid positions based on window size
+    #                 positions = list(
+    #                     range(window,len(scan['V_smoothed'])-window))
+    #                 points = [[] for position in positions]
+
+    #                 for position in positions:
+    #                     # Extract voltage, current at left, middle, and right 
+    #                     # window positions
+    #                     backvoltage, backcurrent = \
+    #                         scan['V_smoothed'][position-window], \
+    #                         scan['I_smoothed'][position-window],
+    #                     frontvoltage, frontcurrent = \
+    #                         scan['V_smoothed'][position+window], \
+    #                         scan['I_smoothed'][position+window],
+    #                     middlevoltage, middlecurrent = \
+    #                         scan['V_smoothed'][position], \
+    #                        scan['I_smoothed'][position],
+
+    #                     backslope = (middlecurrent-backcurrent)/(
+    #                         middlevoltage-backvoltage)
+    #                     frontslope = (frontcurrent-middlecurrent)/(
+    #                         frontvoltage-middlevoltage)
+
+    #                     # Create dictionary per point with slope products, 
+    #                     # middle points, and endpoint voltages
+    #                     # ** Of SMOOTHED voltage and current, not raw
+    #                     points[position-window] = {
+    #                         'slopeprod': backslope*frontslope,
+    #                         'pair': {
+    #                             'voltage': middlevoltage, 
+    #                             'current': middlecurrent,
+    #                         },
+    #                         'raw_pair':{
+    #                             'voltage': scan['V_raw'][
+    #                                 int(position+lower_pad)],
+    #                             'current': scan['I_raw'][
+    #                                 int(position+lower_pad)],
+    #                         },
+    #                         'endpoints': {
+    #                             'back': backvoltage,
+    #                             'front': frontvoltage,
+    #                         },
+    #                     }
+
+    #                 # Fill with dummy values to prevent empty sequence errors
+    #                 extremaPairs = [{'voltage':0, 'current':0}]
+
+    #                 for point in points:
+    #                     # Negative slope product means slopes have opposite 
+    #                     # signs and surround local extrema
+    #                     if point['slopeprod'] < 0 and abs(
+    #                         point['pair']['voltage']) < voltagethresh:
+    #                         # Local maxima/minima
+    #                         extremaPairs.append(point['raw_pair'])
+
+    #                 # Pull out point for maximum/minumum current for given 
+    #                 #  window size
+    #                 if scan is cathodic:
+    #                     windowExtreme = self.find_min_max(
+    #                         extremaPairs, 'current', 'min')
+    #                 elif scan is anodic:
+    #                     windowExtreme = self.find_min_max(
+    #                         extremaPairs, 'current', 'max')
+
+    #                 # Populate master list of extreme currents for all 
+    #                 # window sizes
+    #                 totalExtrema[window - windows[0]] = windowExtreme
+
+    #             # Find most optimal extrema for all window and gradient 
+    #             # possibilities and populate master list of extrema per cycle
+    #             if scan is cathodic:
+    #                 realExtreme = self.find_min_max(
+    #                     totalExtrema, 'current', 'min')
+    #                 allPairs[cycle]['cathodic'] = realExtreme
+    #             elif scan is anodic:
+    #                 realExtreme = self.find_min_max(
+    #                     totalExtrema, 'current', 'max')
+
+    #                 # Find linear fit of beginning linear portion of 
+    #                 # anodic scan to determine adjusted peak current value
+    #                 coefs = np.polyfit(
+    #                     anodic['V_raw'][0:int(0.5*len(anodic['V_raw']))], 
+    #                     anodic['I_raw'][0:int(0.5*len(anodic['I_raw']))], 
+    #                     deg=1,)
+
+    #                 I_unadjusted = realExtreme['current']
+    #                 I_diff = coefs[1] + coefs[0]*realExtreme['voltage']
+    #                 I_adjusted = I_unadjusted - I_diff
+
+    #                 realExtreme['current'] = I_adjusted
+    #                 allPairs[cycle]['anodic'] = realExtreme
+
+
+    def extrema_gw(self, trysimple=False, showplot=False, saveplot=False):
         ''' Extracts maximum and minumum points on each CV curve for each cycle
-            Uses gradient-window (g-w) method on smoothed curves
+            Uses gradient-window (g-w) method on raw data (assuming clean)
             Written by Bernard Kim '''
 
         # # removes last element of self.cycles (incomplete cycles)
         # del self.cycles[max(self.cycles)]
 
-        voltagethresh = 2 # positive and negative hard voltage bounds
-        # as percent of scan length
-        smoothsize = 0.05 # size of smoothing window
-        lbsize = 0.10 # window lower bound size (for w-g)
-        ubsize = 0.25 # window upper bound size (for w-g)
+        # size of full window
+        lbsize = 0.01 # window lower bound size (for w-g)
+        ubsize = 0.10 # window upper bound size (for w-g)
 
         allPairs = {}
+        self.peaks = {}
 
         for cycle in self.cycles:
             voltages = self.cycles[cycle]['voltage']
             currents = self.cycles[cycle]['current']
             times = self.cycles[cycle]['time']
 
-            # Split voltage, current, and time lists into 
-            # cathodic and anodic scans
-            scan_switch = voltages.index(min(voltages))
+            if trysimple:
+                # Do simple min/max to find currents looking at sample as a whole
+                I_p_red = min(currents)
+                I_p_ox = max(currents)
 
-            cathodic = {
-                'V_raw': np.array(voltages[:scan_switch]),
-                'I_raw': np.array(currents[:scan_switch]),
-            }
+                E_p_red = voltages[currents.index(I_p_red)]
+                E_p_ox = voltages[currents.index(I_p_ox)]
 
-            anodic = {
-                'V_raw': np.array(voltages[scan_switch:]),
-                'I_raw': np.array(currents[scan_switch:]),
-            }
-
-            allPairs[cycle] = {}
-
-            # Smooth and run gradient-window algorithm on each scan separately
-            for scan in [cathodic, anodic]:
-
-                # Smooth current data using moving average
-                smoothing_window = round(smoothsize*len(scan['V_raw']))
-                scan['I_smoothed'] = self.moving_average(
-                    scan['I_raw'], smoothing_window)
-
-                # Extract corresponding smoothed voltage points to 
-                # smoothed current points
-                overhang = len(scan['I_raw']) - len(scan['I_smoothed'])
-                lower_pad = np.ceil(overhang/2)
-                upper_pad = np.floor(overhang/2)
-                scan['V_smoothed'] = scan['V_raw'][
-                    int(lower_pad):int(-upper_pad)]
-
-                # Set window size as a function of smoothed scan data length
-                lowerbound = round(lbsize*len(scan['V_smoothed']))
-                upperbound = round(ubsize*len(scan['V_smoothed']))
-                # 1/2 window size, symmetric positive and negative offsets
-                # index of center of window
-                windows = list(range(lowerbound,upperbound))
-
-                totalExtrema = [[] for window in windows]
-
-                for window in windows:
-                    # Create list of valid positions based on window size
-                    positions = list(
-                        range(window,len(scan['V_smoothed'])-window))
-                    points = [[] for position in positions]
-
-                    for position in positions:
-                        # Extract voltage, current at left, middle, and right 
-                        # window positions
-                        backvoltage, backcurrent = \
-                            scan['V_smoothed'][position-window], \
-                            scan['I_smoothed'][position-window],
-                        frontvoltage, frontcurrent = \
-                            scan['V_smoothed'][position+window], \
-                            scan['I_smoothed'][position+window],
-                        middlevoltage, middlecurrent = \
-                            scan['V_smoothed'][position], \
-                           scan['I_smoothed'][position],
-
-                        backslope = (middlecurrent-backcurrent)/(
-                            middlevoltage-backvoltage)
-                        frontslope = (frontcurrent-middlecurrent)/(
-                            frontvoltage-middlevoltage)
-
-                        # Create dictionary per point with slope products, 
-                        # middle points, and endpoint voltages
-                        # ** Of SMOOTHED voltage and current, not raw
-                        points[position-window] = {
-                            'slopeprod': backslope*frontslope,
-                            'pair': {
-                                'voltage': middlevoltage, 
-                                'current': middlecurrent,
-                            },
-                            'raw_pair':{
-                                'voltage': scan['V_raw'][
-                                    int(position+lower_pad)],
-                                'current': scan['I_raw'][
-                                    int(position+lower_pad)],
-                            },
-                            'endpoints': {
-                                'back': backvoltage,
-                                'front': frontvoltage,
-                            },
-                        }
-
-                    # Fill with dummy values to prevent empty sequence errors
-                    extremaPairs = [{'voltage':0, 'current':0}]
-
-                    for point in points:
-                        # Negative slope product means slopes have opposite 
-                        # signs and surround local extrema
-                        if point['slopeprod'] < 0 and abs(
-                            point['pair']['voltage']) < voltagethresh:
-                            # Local maxima/minima
-                            extremaPairs.append(point['raw_pair'])
-
-                    # Pull out point for maximum/minumum current for given 
-                    #  window size
-                    if scan is cathodic:
-                        windowExtreme = self.find_min_max(
-                            extremaPairs, 'current', 'min')
-                    elif scan is anodic:
-                        windowExtreme = self.find_min_max(
-                            extremaPairs, 'current', 'max')
-
-                    # Populate master list of extreme currents for all 
-                    # window sizes
-                    totalExtrema[window - windows[0]] = windowExtreme
-
-                # Find most optimal extrema for all window and gradient 
-                # possibilities and populate master list of extrema per cycle
-                if scan is cathodic:
-                    realExtreme = self.find_min_max(
-                        totalExtrema, 'current', 'min')
-                    allPairs[cycle]['cathodic'] = realExtreme
-                elif scan is anodic:
-                    realExtreme = self.find_min_max(
-                        totalExtrema, 'current', 'max')
-
-                    # Find linear fit of beginning linear portion of 
-                    # anodic scan to determine adjusted peak current value
-                    coefs = np.polyfit(
-                        anodic['V_raw'][0:int(0.5*len(anodic['V_raw']))], 
-                        anodic['I_raw'][0:int(0.5*len(anodic['I_raw']))], 
-                        deg=1,)
-
-                    I_unadjusted = realExtreme['current']
-                    I_diff = coefs[1] + coefs[0]*realExtreme['voltage']
-                    I_adjusted = I_unadjusted - I_diff
-
-                    realExtreme['current'] = I_adjusted
-                    allPairs[cycle]['anodic'] = realExtreme
-
-
-            # Compute potential difference (E_p_ox - E_p_red) and 
-            # current ratio (I_p_ox/I_p_red) and add to master list
-
-            # allPairs[cycle]['']
-
-            if showplot and cycle == 1:
-                fig, ax = plt.subplots(figsize=(16,9), dpi=60)
-                ax.plot(
-                    cathodic['V_raw'], cathodic['I_raw'], 
-                    color='#800000', linewidth=4, label='raw')
-                ax.plot(
-                    anodic['V_raw'], anodic['I_raw'], 
-                    color='#800000', linewidth=4)
-                # ax.plot(cathodic['V_smoothed'], cathodic['I_smoothed'], 
-                #    color='#005DBB', linewidth=2, label='smoothed')
-                # ax.plot(anodic['V_smoothed'], anodic['I_smoothed'], 
-                #    color='#005DBB', linewidth=2)
-                ax.plot(
-                    anodic['V_raw'], coefs[1]+coefs[0]*anodic['V_raw'], 
-                    color='k')
-
-                ax.plot(
-                    allPairs[cycle]['cathodic']['voltage'], 
-                    allPairs[cycle]['cathodic']['current'],
-                    color='#00D48D', marker="o", markersize=20, 
-                    markeredgewidth=2, markerfacecolor='None')
-                ax.plot(
-                    allPairs[cycle]['anodic']['voltage'], 
-                    allPairs[cycle]['anodic']['current'],
-                    color='#00D48D', marker="o", markersize=20, 
-                    markeredgewidth=2, markerfacecolor='None')
-                ax.set_xlabel('Voltage [V]')
-                ax.set_ylabel('Current [mA]')
-                ax.legend()
-                ax.set_title('wd_' + self.title + '_C' + str(cycle))
-                ax.grid()
-
-                # plt.show()
-                # plt.close()
-
-                if saveplot:
-                    plt.savefig('wd_' +self.title+ '_C' + str(cycle) + '.png')
-
-        if save_json:
-            # write data to csv file
-            filename = str(self.title)
-
-            peaks = {}
-
-            for cycle in allPairs:
-                peaks[cycle] = {
-                    'E_p_ox': allPairs[cycle]['anodic']['voltage'], 
-                    'I_p_ox': allPairs[cycle]['anodic']['current'], 
-                    'E_p_red': allPairs[cycle]['cathodic']['voltage'], 
-                    'I_p_red': allPairs[cycle]['cathodic']['current'], 
+                allPairs[cycle] = {
+                    'cathodic': {
+                        'voltage': E_p_red,
+                        'current': I_p_red,
+                    },
+                    'anodic': {
+                        'voltage': E_p_ox,
+                        'current': I_p_ox,
+                    },
                 }
 
-            utilities.save_json(data=peaks, filename=filename+'.json')
+            # If simple check fails, then run gw algorithm
+            elif not trysimple or E_p_red == min(voltages) or E_p_ox == max(voltages):
+                # Split voltage, current, and time lists into 
+                # cathodic and anodic scans
+                scan_switch = voltages.index(min(voltages))
+
+                cathodic = {
+                    'V': np.array(voltages[:scan_switch]),
+                    'I': np.array(currents[:scan_switch]),
+                }
+
+                anodic = {
+                    'V': np.array(voltages[scan_switch:]),
+                    'I': np.array(currents[scan_switch:]),
+                }
+
+                allPairs[cycle] = {}
+
+                # Run gradient-window algorithm on each scan separately
+                for scan in [cathodic, anodic]:
+
+                    # Set window size as a function of smoothed scan data length
+                    lowerbound = round(lbsize/2*len(scan['V']))
+                    upperbound = round(ubsize/2*len(scan['V']))
+                    # index of center of window
+                    windows = list(range(lowerbound,upperbound))
+
+                    totalExtrema = [[] for window in windows]
+
+                    for window in windows:
+                        # Create list of valid positions based on window size
+                        positions = list(range(window,len(scan['V'])-window))
+                        points = [[] for position in positions]
+
+                        for position in positions:
+                            # Extract voltage, current at left, middle, and right 
+                            # window positions
+                            backvoltage, backcurrent = \
+                                scan['V'][position-window], \
+                                scan['I'][position-window],
+                            frontvoltage, frontcurrent = \
+                                scan['V'][position+window], \
+                                scan['I'][position+window],
+                            middlevoltage, middlecurrent = \
+                                scan['V'][position], \
+                                scan['I'][position],
+
+                            backslope = (middlecurrent-backcurrent)/(
+                                middlevoltage-backvoltage)
+                            frontslope = (frontcurrent-middlecurrent)/(
+                                frontvoltage-middlevoltage)
+
+                            # Create dictionary per point with slope products, 
+                            # middle points, and endpoint voltages
+                            points[position-window] = {
+                                'slopeprod': backslope*frontslope,
+                                'pair': {
+                                    'voltage': middlevoltage, 
+                                    'current': middlecurrent,
+                                },
+                                'endpoints': {
+                                    'back': backvoltage,
+                                    'front': frontvoltage,
+                                },
+                            }
+
+                        # Fill with dummy values to prevent empty sequence errors
+                        extremaPairs = [{'voltage':0, 'current':0}]
+
+                        for point in points:
+                            # Negative slope product means slopes have opposite 
+                            # signs and surround local extrema
+                            if point['slopeprod'] < 0:
+                                # Local maxima/minima
+                                extremaPairs.append(point['pair'])
+
+                        # Pull out point for maximum/minumum current for given 
+                        #  window size
+                        if scan is cathodic:
+                            windowExtreme = self.find_min_max(
+                                extremaPairs, 'current', 'min')
+                        elif scan is anodic:
+                            windowExtreme = self.find_min_max(
+                                extremaPairs, 'current', 'max')
+
+                        # Populate master list of extreme currents for all 
+                        # window sizes
+                        totalExtrema[window - windows[0]] = windowExtreme
+
+                    # Find most optimal extrema for all window and gradient 
+                    # possibilities and populate master list of extrema per cycle
+                    if scan is cathodic:
+                        realExtreme = self.find_min_max(
+                            totalExtrema, 'current', 'min')
+                        allPairs[cycle]['cathodic'] = realExtreme
+                    elif scan is anodic:
+                        realExtreme = self.find_min_max(
+                            totalExtrema, 'current', 'max')
+
+                        # Find linear fit of beginning linear portion of 
+                        # anodic scan to determine adjusted peak current value
+                        coefs = np.polyfit(
+                            anodic['V'][0:int(0.5*len(anodic['V']))], 
+                            anodic['I'][0:int(0.5*len(anodic['I']))], 
+                            deg=1,)
+
+                        I_unadjusted = realExtreme['current']
+                        I_diff = coefs[1] + coefs[0]*realExtreme['voltage']
+                        I_adjusted = I_unadjusted - I_diff
+
+                        realExtreme['current'] = I_adjusted
+                        allPairs[cycle]['anodic'] = realExtreme
+
+        for cycle in allPairs:
+            self.peaks[cycle] = {
+                'E_p_ox': allPairs[cycle]['anodic']['voltage'], 
+                'I_p_ox': allPairs[cycle]['anodic']['current'], 
+                'E_p_red': allPairs[cycle]['cathodic']['voltage'], 
+                'I_p_red': allPairs[cycle]['cathodic']['current'], 
+            }
+
+        if showplot and cycle == 200:
+            fig, ax = plt.subplots(figsize=(16,9), dpi=60)
+            ax.plot(
+                cathodic['V'], cathodic['I'], 
+                color='#800000', linewidth=4, label='raw')
+            ax.plot(
+                anodic['V'], anodic['I'], 
+                color='#800000', linewidth=4)
+            ax.plot(
+                anodic['V'], coefs[1]+coefs[0]*anodic['V'], 
+                color='k')
+
+            ax.plot(
+                allPairs[cycle]['cathodic']['voltage'], 
+                allPairs[cycle]['cathodic']['current'],
+                color='#00D48D', marker="o", markersize=20, 
+                markeredgewidth=2, markerfacecolor='None')
+            ax.plot(
+                allPairs[cycle]['anodic']['voltage'], 
+                allPairs[cycle]['anodic']['current'],
+                color='#00D48D', marker="o", markersize=20, 
+                markeredgewidth=2, markerfacecolor='None')
+            ax.set_xlabel('Voltage [V]')
+            ax.set_ylabel('Current [mA]')
+            ax.legend()
+            ax.set_title('wd_' + self.title + '_C' + str(cycle))
+            ax.grid()
+
+            if saveplot:
+                plt.savefig('wd_' +self.title+ '_C' + str(cycle) + '.png')
+
+            plt.show()
+
+
+    def save_stats(self):
+        ''' Saves statistics for file in json
+            Requires appropriate methods to be called first for desired metrics
+            By default, will only record oxidation and reduction charges
+            Can also save CV peak potentals/currents and nucleation potentials
+        '''
+
+        filename = str(self.title)
+        stats = {}
+
+        for cycle in self.cycles:
+            stats[cycle] = {
+                'Q_ox': self.charges[cycle]['oxidation'],
+                'Q_red': self.charges[cycle]['reduction'],
+            }
+
+        try:
+            if self.peaks:
+                for cycle in self.peaks:
+                    stats[cycle]['E_p_ox'] = self.peaks[cycle]['E_p_ox']
+                    stats[cycle]['I_p_ox'] = self.peaks[cycle]['I_p_ox']
+                    stats[cycle]['E_p_red'] = self.peaks[cycle]['E_p_red']
+                    stats[cycle]['I_p_red'] = self.peaks[cycle]['I_p_red']
+        except AttributeError:
+            pass
+
+        # try:
+        #     if self.E_co and self.E_N:
+        #         for cycle_co, cycle_N in zip(self.E_co, self.E_N):
+        #             stats[cycle_co]['E_co'] = self.E_co[cycle_co]
+        #             stats[cycle_N]['E_N'] = self.E_N[cycle_N]
+        # except AttributeError:
+        #     pass
+
+        try:
+            if self.E_co:
+                for cycle in self.E_co:
+                    stats[int(cycle)]['E_co'] = self.E_co[cycle]
+        except AttributeError:
+            pass
+
+
+        utilities.save_json(data=stats, filename=filename+'.json')
 
 
     def get_charges(self):
@@ -655,10 +990,125 @@ class CV:
         self.charges = allcharge
 
 
+    def calculate_nucleation_potentials(self, twoelec=False):
+        ''' Calculates nucleation potentials if present per cycle
+            Returns crossover potential and nucleation potential
+        '''
+
+        self.E_co = {}
+        self.E_N = {}
+
+        for cycle in self.cycles:
+            voltages = self.cycles[cycle]['voltage']
+            currents = self.cycles[cycle]['current']
+
+            if not twoelec:
+                scan_switch = voltages.index(min(voltages))
+
+                # Flipping order of cathodic array so potentials are listed 
+                # from negative to positive
+                cathodic = {
+                    'E': np.array(voltages[:scan_switch])[::-1],
+                    'I': np.array(currents[:scan_switch])[::-1],
+                }
+
+                anodic = {
+                    'E': np.array(voltages[scan_switch:]),
+                    'I': np.array(currents[scan_switch:]),
+                }
+
+            elif twoelec:
+                scan_switch = voltages.index(max(voltages))
+
+                # Flipping order of cathodic array so potentials are listed 
+                # from negative to positive
+                cathodic = {
+                    'E': np.array(voltages[scan_switch:])[::-1],
+                    'I': np.array(currents[scan_switch:])[::-1],
+                }
+
+                anodic = {
+                    'E': np.array(voltages[:scan_switch]),
+                    'I': np.array(currents[:scan_switch]),
+                }
+
+            # Find crossover potential
+            anodic_sign = np.sign(anodic['I'])
+            switch = False
+            E_co_idx = 0
+
+            if not switch:
+                for idx, sign in enumerate(anodic_sign):
+                    if sign == 1 and anodic_sign[idx-1] == -1:
+                        switch = True
+                        E_co_idx = idx
+
+            E_co = anodic['E'][E_co_idx]
+
+            # Find nucleation potential
+            # # where current exceeds -0.02mA/cm^2 magnitude
+            # switch = False
+            # E_N_idx = 0
+
+            # if not switch:
+            #     for idx, current in enumerate(cathodic['I']):
+            #         if current < -0.03:
+            #             switch = True
+            #             E_N_idx = idx
+
+            # E_N = cathodic['E'][E_N_idx]
+
+            # flat = utilities.window_gradient(
+            #     x=cathodic['E'], y=cathodic['I'], bounds=(0.1, 0.25),
+            #     slope=0, lsq=False)
+            steep_idx1 = np.where(cathodic['E'] < 0)
+            steep_idx2 = np.where(cathodic['E'][steep_idx1] > -1.0)
+
+            steep = utilities.window_gradient(
+                x=cathodic['E'][steep_idx2], y=cathodic['I'][steep_idx2], 
+                bounds=(0.05, 0.2), slope=1, lsq=False,
+                windownum=25, positionnum=25)
+
+            E_N = (-steep[1])/steep[0]
+
+            # print('Cycle ' + str(cycle))
+            # print(E_N)
+
+            self.E_co[cycle] = E_co
+            self.E_N[cycle] = E_N
+
+
+    def calculate_crossover_potentials(self):
+        ''' Calculates nucleation potentials if present per cycle
+            Returns crossover potential and nucleation potential
+        '''
+
+        self.E_co = {}
+
+        for cycle in self.cycles:
+            voltages = self.cycles[cycle]['voltage']
+            currents = self.cycles[cycle]['current']
+
+            E_co = []
+
+            current_sign = np.sign(currents)
+            for idx, sign in enumerate(current_sign[1:]):
+                if sign != current_sign[idx-1] and np.abs(voltages[idx]) < 0.5:
+                # if sign != current_sign[idx-1]:
+                    E_co.append(voltages[idx])
+
+            # try:
+            #     if len(E_co) != 2:
+            #         raise Exception
+
+            try:
+                self.E_co[cycle] = (min(E_co), max(E_co))
+            except ValueError:
+                pass
+
+
     def plot_charge(self, show=False, save=False, title=None, savename=None):
         ''' Plots total oxidation and reduction charge per cycle of CV '''
-
-        self.get_charges()
 
         font = {'family': 'Arial', 'size': 24}
         matplotlib.rc('font', **font)
@@ -939,7 +1389,7 @@ class CV:
 
 
 class CV_batch:
-    ''' Method for batch processing data from Gamry
+    ''' Class for batch processing data from Gamry
     Uses methods defined in CV class
 
     Author: Bernard Kim
@@ -1196,18 +1646,24 @@ class CV_extrema_plot:
             diffusivity = (coefs[0]/(2.69e5 * 2**1.5 * mol/rho))**2
 
             ax1.plot(
-                nu_sqrt, I_ox[mol], 
+                nu_sqrt, 
+                I_ox[mol], 
                 label=str(mol)+' m, D_o = %.3e cm^2/s'%diffusivity,
-                linewidth=3, color=plt.cm.tab10(coloridx[int(idx)]))
+                linewidth=3, 
+                color=plt.cm.tab10(coloridx[int(idx)])
+            )
 
         for idx, mol in enumerate(I_red):
             coefs = np.polyfit(nu_sqrt, I_red[mol], deg=1)
             diffusivity = (coefs[0]/(2.69e5 * 2**1.5 * mol/rho))**2
 
             ax2.plot(
-                nu_sqrt, I_red[mol], 
+                nu_sqrt, 
+                I_red[mol], 
                 label=str(mol)+' m, D_o = %.3e cm^2/s'%diffusivity,
-                linewidth=3, color=plt.cm.tab10(coloridx[int(idx)]))
+                linewidth=3, 
+                color=plt.cm.tab10(coloridx[int(idx)])
+            )
 
         ax1.legend()
         ax1.set_xlabel(r'$\nu^{1/2} [V/s]^{1/2}$')
@@ -1433,27 +1889,54 @@ class CA:
             self.voltage = voltage
             self.current = current
 
-        Vstep1_mask, Vstep2_mask = [], []
+        if self.Vstep1 != self.Vstep2:
+            self.numsteps = 2
 
-        for time, voltage in zip(self.time, self.voltage):
-            if time > 0 and np.abs(voltage-self.Vstep1) < v_tolerance:
-                Vstep1_mask.append(1)
-                Vstep2_mask.append(0)
-            elif time > 0 and np.abs(voltage-self.Vstep2) < v_tolerance:
-                Vstep1_mask.append(0)
-                Vstep2_mask.append(1)
-            else:
-                Vstep1_mask.append(0)
-                Vstep2_mask.append(0)
+            Vstep1_mask, Vstep2_mask = [], []
 
-        Vstep1_pos = np.where(np.array(Vstep1_mask)==1)[0]
-        Vstep2_pos = np.where(np.array(Vstep2_mask)==1)[0]
+            for time, voltage in zip(self.time, self.voltage):
+                if time > 0 and np.abs(voltage-self.Vstep1) < v_tolerance:
+                    Vstep1_mask.append(1)
+                    Vstep2_mask.append(0)
+                elif time > 0 and np.abs(voltage-self.Vstep2) < v_tolerance:
+                    Vstep1_mask.append(0)
+                    Vstep2_mask.append(1)
+                else:
+                    Vstep1_mask.append(0)
+                    Vstep2_mask.append(0)
 
-        self.Vstep1_idx = [Vstep1_pos[0], Vstep1_pos[-1]]
-        self.Vstep2_idx = [Vstep2_pos[0], Vstep2_pos[-1]]
+            Vstep1_pos = np.where(np.array(Vstep1_mask)==1)[0]
+            Vstep2_pos = np.where(np.array(Vstep2_mask)==1)[0]
 
-        self.ss_current1 = self.current[self.Vstep1_idx[1]]
-        self.ss_current2 = self.current[self.Vstep2_idx[1]]
+            self.Vstep1_idx = [Vstep1_pos[1], Vstep1_pos[-1]]
+            self.Vstep2_idx = [Vstep2_pos[1], Vstep2_pos[-1]]
+
+            self.ss_current1 = self.current[self.Vstep1_idx[1]]
+            self.ss_current2 = self.current[self.Vstep2_idx[1]]
+
+        elif self.Vstep1 == self.Vstep2:
+            self.numsteps = 1
+
+            Vstep1_mask = []
+
+            for time, voltage in zip(self.time, self.voltage):
+                if time > 0 and np.abs(voltage-self.Vstep1) < v_tolerance:
+                    Vstep1_mask.append(1)
+                else:
+                    Vstep1_mask.append(0)
+
+            Vstep1_pos = np.where(np.array(Vstep1_mask)==1)[0]
+            self.Vstep1_idx = [Vstep1_pos[0], Vstep1_pos[-1]]
+            self.ss_current1 = self.current[self.Vstep1_idx[1]]
+
+        # try:
+        #     for step in (self.Vstep1_idx, self.Vstep2_idx):
+        #         sign = np.sign(np.mean(self.current[step[0]:step[1]]))
+        #         if sign == 1:
+        #             steptype = 'Oxidation'
+        #         elif sign == -1:
+        #             steptype = 'Reduction'
+
 
         self.mol_Zn, self.molal_Zn = utilities.get_init_concentrations(
             title=filename, mass=self.mass, test='CA')
@@ -1484,8 +1967,13 @@ class CA:
         ax2.plot(self.time, self.current,
                  linewidth=3, marker='o', markersize=5, color='#000000',)
 
-        i_text = 'i$^1_{ss}$ = %.3f mA/cm$^2$'%self.ss_current1 + '\n' +\
-            'i$^2_{ss}$ = %.3f mA/cm$^2$'%self.ss_current2
+        if self.numsteps == 2:
+            i_text = 'i$^1_{ss}$ = %.3f mA/cm$^2$'%self.ss_current1 + '\n' +\
+                'i$^2_{ss}$ = %.3f mA/cm$^2$'%self.ss_current2
+        elif self.numsteps == 1:
+            i_text = 'i$^1_{ss}$ = %.3f mA/cm$^2$'%self.ss_current1
+
+
         x_tlim, y_tlim = ax2.get_xlim(), ax2.get_ylim()
 
         x_tpos = 0.67*(x_tlim[1]-x_tlim[0]) + x_tlim[0]
@@ -1526,42 +2014,114 @@ class CA:
         # bounds for window gradient to find coefs on Cottrell plot
         bounds = (0.05, 0.45)
 
+        if self.numsteps == 2:
+            self.step1 = {'idx': self.Vstep1_idx, 'slope': -1}
+            self.step2 = {'idx': self.Vstep2_idx, 'slope': 1}
 
-        self.step1 = {'idx': self.Vstep1_idx, 'slope': -1}
-        self.step2 = {'idx': self.Vstep2_idx, 'slope': 1}
-        # self.step1 = {'idx': self.Vstep1_idx, 'slope': np.sign(self.Vstep1)}
-        # self.step2 = {'idx': self.Vstep2_idx, 'slope': np.sign(self.Vstep2)}
+            # self.step1 = {'idx': self.Vstep1_idx, 'slope': np.sign(self.Vstep1)}
+            # self.step2 = {'idx': self.Vstep2_idx, 'slope': np.sign(self.Vstep2)}
 
-        for step in [self.step1, self.step2]:
-            # make step values at Vstep = 0V read as positive (oxidation)
-            if step['slope'] == 0:
-                step['slope'] == 1
+            for step in [self.step1, self.step2]:
+                # # make step values at Vstep = 0V read as positive (oxidation)
+                # if step['slope'] == 0:
+                #     step['slope'] == 1
 
-            idx = step['idx']
-            slope = step['slope']
+                idx = step['idx']
+                slope = step['slope']
 
-            time_raw = self.time[idx[0]:idx[1]]
-            time = [(t-time_raw[0])**(-0.5) for t in time_raw[1:]]
-            current = self.current[idx[0]+1:idx[1]]
+                time_raw = self.time[idx[0]:idx[1]]
+                time = [(t-time_raw[0])**(-0.5) for t in time_raw[1:]]
+                current = self.current[idx[0]+1:idx[1]]
 
-            coefs = utilities.window_gradient(x=time, y=current,
-                bounds=bounds, slope=slope, lsq=True)
-            line = [coefs[1] + t*coefs[0] for t in time]
-            D = slope * coefs[0] * np.pi/((n*F*A*c0)**2)
+                if step == self.step1: # Reduction, weight beginning more heavily
+                    # use window gradient here
+                    # weight = [t**2 for t in time_raw[1:]]
 
-            step['time'] = time
-            step['current'] = current
-            step['line'] = line
-            step['D'] = D
+                    time_analyze = []
+                    current_analyze = []
+
+                    time_rev = time[::-1]
+                    current_rev = current[::-1]
+
+                    currentmax = np.min(current_rev)
+
+                    switch = 0
+                    for idx, curr in enumerate(current_rev):
+                        if switch == 0:
+                            time_analyze.append(time_rev[idx])
+                            current_analyze.append(current_rev[idx])
+
+                        if current_rev[idx] == currentmax:
+                            switch = 1
+                            idt = idx
+
+                        # if switch == 0:
+                        #     if current_rev[idx] >= currentmax:
+                        #         time_analyze.append(time_rev[idx])
+                        #         current_analyze.append(current_rev[idx])
+                        #     else:
+                        #         switch+=1
+                        # else:
+                        #     pass
+
+                    # weight = [t**1.5 for t in time_raw[-(idt+1):][::-1]]
+
+                    # coefs = np.polyfit(x=time_analyze, 
+                    #     y=current_analyze, deg=1, w=weight)
+
+                    coefs = utilities.window_gradient(x=time_analyze, 
+                        y=current_analyze, bounds=bounds, slope=slope, lsq=True)
+                    # coefs = utilities.window_gradient(x=time, y=current,
+                    #     bounds=bounds, slope=slope, lsq=True)
+                    # coefs = utilities.window_gradient(x=time, y=current,
+                    #     bounds=bounds, slope=slope, lsq=False)
+                elif step == self.step2: # Oxidation, weight ending more heavily
+                    # weight = time
+                    weight = [t**3.5 for t in time]
+                    coefs = np.polyfit(x=time, y=current, deg=1, w=weight)
+
+                line = [coefs[1] + t*coefs[0] for t in time]
+                D = slope * coefs[0] * np.pi/((n*F*A*c0)**2)
+
+                step['time'] = time
+                step['current'] = current
+                step['line'] = line
+                step['D'] = D
+
+        elif self.numsteps == 1:
+            self.step1 = {'idx': self.Vstep1_idx, 
+                'slope': np.sign(self.current[self.Vstep1_idx[1]])}
+
+            for step in [self.step1]:
+                # make step values at Vstep = 0V read as positive (oxidation)
+                if step['slope'] == 0:
+                    step['slope'] == 1
+
+                idx = step['idx']
+                slope = step['slope']
+
+                time_raw = self.time[idx[0]:idx[1]]
+                time = [(t-time_raw[0])**(-0.5) for t in time_raw[1:]]
+                current = self.current[idx[0]+1:idx[1]]
+
+                coefs = utilities.window_gradient(x=time, y=current,
+                    bounds=bounds, slope=slope, lsq=True)
+                line = [coefs[1] + t*coefs[0] for t in time]
+                D = slope * coefs[0] * np.pi/((n*F*A*c0)**2)
+
+                step['time'] = time
+                step['current'] = current
+                step['line'] = line
+                step['D'] = D
 
 
     def plot_cottrell(self, show=False, save=False, title=None, 
-        savename=None):
+        savename=None,):
         ''' Plots Cottrell plots for both steps '''
 
         # Get diffusivity if not gathered already
         try:
-            if self.step1 and self.step2:
+            if self.step1 or self.step2:
                 pass
         except AttributeError:
             self.calculate_diffusivity()
@@ -1569,28 +2129,82 @@ class CA:
         font = {'family': 'Arial', 'size':20}
         matplotlib.rc('font', **font)
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16,9), dpi=75)
+        if self.numsteps == 2:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16,9), dpi=75)
 
-        ax1.plot(self.step1['time'], self.step1['current'], 
-            linewidth=3, marker='o', markersize=5, color='#000000')
-        ax1.plot(self.step1['time'], self.step1['line'], 
-            linewidth=3, color='#FF0000',
-            label='D$_0$ = %.3E cm$^2$/s'% Decimal(self.step1['D'])+\
-            '\n'+'V = '+str(self.Vstep1)+'V')
-        ax2.plot(self.step2['time'], self.step2['current'],  
-            linewidth=3, marker='o', markersize=5, color='#000000')
-        ax2.plot(self.step2['time'], self.step2['line'],
-            linewidth=3, color='#FF0000',
-            label='D$_0$ = %.3E cm$^2$/s'% Decimal(self.step2['D'])+\
-            '\n'+'V = '+str(self.Vstep2)+'V')
+            ax1.plot(
+                self.step1['time'],
+                self.step1['current'],
+                linewidth=3, 
+                marker='o', 
+                markersize=5, 
+                color='#000000'
+            )
+            ax1.plot(
+                self.step1['time'],
+                self.step1['line'],
+                linewidth=3, 
+                color='#FF0000',
+                label='D$_0$ = %.3E cm$^2$/s'% Decimal(self.step1['D'])+\
+                '\n'+'V = '+str(self.Vstep1)+'V'
+            )
+            ax2.plot(
+                self.step2['time'],
+                self.step2['current'],
+                linewidth=3, 
+                marker='o', 
+                markersize=5, 
+                color='#000000'
+            )
+            ax2.plot(
+                self.step2['time'],
+                self.step2['line'],
+                linewidth=3, 
+                color='#FF0000',
+                label='D$_0$ = %.3E cm$^2$/s'% Decimal(self.step2['D'])+\
+                '\n'+'V = '+str(self.Vstep2)+'V'
+            )
 
-        ax1.set_xlabel('t$^{-0.5}$, [s$^{-0.5}$]')
-        ax1.set_ylabel('Current, I [mA/cm$^2$]')
-        ax1.legend()
+            xlim1 = ax1.get_xlim()
+            ax1.set_xlim([xlim1[1], xlim1[0]])
 
-        ax2.set_xlabel('t$^{-0.5}$, [s$^{-0.5}$]')
-        ax2.set_ylabel('Current, I [mA/cm$^2$]')
-        ax2.legend()
+            xlim2 = ax2.get_xlim()
+            ax2.set_xlim([xlim2[1], xlim2[0]])
+
+            ax1.set_xlabel('t$^{-0.5}$, [s$^{-0.5}$]')
+            ax1.set_ylabel('Current, I [mA/cm$^2$]')
+            ax1.legend()
+
+            ax2.set_xlabel('t$^{-0.5}$, [s$^{-0.5}$]')
+            ax2.set_ylabel('Current, I [mA/cm$^2$]')
+            ax2.legend()
+
+        elif self.numsteps == 1:
+            fig, ax1 = plt.subplots(1, 1, figsize=(8,9), dpi=75)
+
+            ax1.plot(
+                self.step1['time'], 
+                self.step1['current'], 
+                linewidth=3, 
+                marker='o', 
+                markersize=5, 
+                color='#000000'
+            )
+            ax1.plot(
+                self.step1['time'], 
+                self.step1['line'], 
+                linewidth=3, 
+                color='#FF0000',
+                label='D$_0$ = %.3E cm$^2$/s'% Decimal(self.step1['D'])+\
+                '\n'+'V = '+str(self.Vstep1)+'V'
+            )
+
+            ax1.set_xlabel('t$^{-0.5}$, [s$^{-0.5}$]')
+            ax1.set_ylabel('Current, I [mA/cm$^2$]')
+            ax1.legend()
+
+            xlim1 = ax1.get_xlim()
+            ax1.set_xlim([xlim1[1], xlim1[0]])
 
         if title:
             fig.suptitle(title)
@@ -1674,13 +2288,23 @@ class CA_batch:
         for idx, V_step in enumerate(self.alldata):
             label = 'i$_{ss}$ = %.3f mA/cm$^2$'%self.ss_currents[V_step]
 
-            ax1.plot(self.alldata[V_step].time, self.alldata[V_step].voltage,
-                linewidth=3, marker='o', markersize=5, 
-                color=plt.cm.tab10(coloridx[int(idx)]))
-            ax2.plot(self.alldata[V_step].time, self.alldata[V_step].current,
-                linewidth=3, marker='o', markersize=5, 
+            ax1.plot(
+                self.alldata[V_step].time, 
+                self.alldata[V_step].voltage,
+                linewidth=3, 
+                marker='o', 
+                markersize=5, 
+                color=plt.cm.tab10(coloridx[int(idx)])
+            )
+            ax2.plot(
+                self.alldata[V_step].time, 
+                self.alldata[V_step].current,
+                linewidth=3, 
+                marker='o', 
+                markersize=5, 
                 color=plt.cm.tab10(coloridx[int(idx)]),
-                label=label)
+                label=label
+            )
 
         ax1.set_ylabel('Potential vs. Ref [V]')
         ax2.set_ylabel('Current [mA/cm$^2$]')
@@ -1726,27 +2350,41 @@ class CA_batch:
 
         for idx, data in enumerate(self.alldata):
             if self.redox is 'red':
-                ax.plot(self.alldata[data].step1['time'], 
+                ax.plot(
+                    self.alldata[data].step1['time'], 
                     self.alldata[data].step1['current'], 
-                    linewidth=3, marker='o', markersize=5, color='#000000')
-                ax.plot(self.alldata[data].step1['time'], 
+                    linewidth=3, 
+                    marker='o', 
+                    markersize=5, 
+                    color='#000000'
+                )
+                ax.plot(
+                    self.alldata[data].step1['time'], 
                     self.alldata[data].step1['line'], 
                     linewidth=3, 
                     color=plt.cm.tab10(coloridx[int(idx)]),
                     label='D$_0$ = %.3E cm$^2$/s'% Decimal(
                         self.alldata[data].step1['D'])+\
-                        '\n'+'V = '+str(self.alldata[data].Vstep1)+'V')
+                        '\n'+'V = '+str(self.alldata[data].Vstep1)+'V'
+                )
             elif self.redox is 'ox':
-                ax.plot(self.alldata[data].step2['time'], 
+                ax.plot(
+                    self.alldata[data].step2['time'], 
                     self.alldata[data].step2['current'], 
-                    linewidth=3, marker='o', markersize=5, color='#000000')
-                ax.plot(self.alldata[data].step2['time'], 
+                    linewidth=3, 
+                    marker='o', 
+                    markersize=5, 
+                    color='#000000'
+                )
+                ax.plot(
+                    self.alldata[data].step2['time'], 
                     self.alldata[data].step2['line'], 
                     linewidth=3, 
                     color=plt.cm.tab10(coloridx[int(idx)]),
                     label='D$_0$ = %.3E cm$^2$/s'% Decimal(
                         self.alldata[data].step2['D'])+\
-                        '\n'+'V = '+str(self.alldata[data].Vstep2)+'V')
+                        '\n'+'V = '+str(self.alldata[data].Vstep2)+'V'
+                    )
 
         ax.set_xlabel('t$^{-0.5}$, [s$^{-0.5}$]')
         ax.set_ylabel('Current, I [mA/cm$^2$]')

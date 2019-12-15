@@ -395,6 +395,9 @@ class profile:
 
         fig, ax = plt.subplots(figsize=(16,9), dpi=75)
 
+        # ax.plot(self.line['x']*0.001, self.line['height'],
+        #     linewidth=2, color='k',)
+
         ax.plot(self.line['x']*0.001, self.line['height'],
             linewidth=2, color='k', alpha=0.3)
         ax.plot(self.line['x'][self.idxs[0]:self.idxs[1]]*0.001, 
@@ -419,7 +422,7 @@ class profile:
             if savename:
                 plt.savefig(savename + '.png')
             else:
-                plt.savefig(self.title + '_plot' + '.png')
+                plt.savefig(self.title + '_plot' + '.svg')
 
         if show:
             plt.show()
@@ -487,12 +490,12 @@ class profile:
         ax.plot(self.line['x']*0.001, self.line['height'],
             linewidth=2, color='k', alpha=0.3)
         ax.plot(isolatedtrace, self.line['height'][self.idxs[0]:self.idxs[1]],
-            linewidth=2, color='k', label='Primary')
+            linewidth=2, color='k', label=r'$P_a = $'+'%.3f µm'%self.metrics['P']['Pa'])
 
         ax.plot(isolatedtrace, self.waviness_zero_avg, linewidth=2, color='b',
-            label='Wq = '+str(self.metrics['W']['Wq']))
+            label=r'$W_q = $'+'%.3f µm'%self.metrics['W']['Wq'])
         ax.plot(isolatedtrace, self.roughness, linewidth=2, color='r',
-            label='Rq = '+str(self.metrics['R']['Rq']))
+            label=r'$R_q = $'+'%.3f µm'%self.metrics['R']['Rq'])
 
         ax.legend()
         ax.set_xlabel('Horizontal Position [mm]')
@@ -511,9 +514,9 @@ class profile:
 
         if save:
             if savename:
-                plt.savefig(savename + '.png')
+                plt.savefig(savename + '.svg')
             else:
-                plt.savefig(self.title + '_RW' + '.png')
+                plt.savefig(self.title + '_RW' + '.svg')
 
         if show:
             plt.show()
@@ -568,12 +571,58 @@ class profile:
             }
 
 
+    def level_trace(self, start=None, end=None, show=False, savecsv=False):
+        ''' Levels out trace with manually entered start and endpoints 
+            Can show new plot, but will not save
+            Can save adjusted trace as csv
+            '''
+
+        if not start or not end:
+            startidx = 0
+            endidx = len(self.line['x'])-1
+        elif start and end:
+            startidx = np.where(self.line['x']==start)[0][0]
+            endidx = np.where(self.line['x']==end)[0][0]
+
+        points = [
+            (self.line['x'][startidx], self.line['height'][startidx]),
+            (self.line['x'][endidx], self.line['height'][endidx]),
+        ]
+
+        c1, c0 = np.polyfit(
+            np.array([points[0][0], points[1][0]]), 
+            np.array([points[0][1], points[1][1]]), 
+            deg=1
+        )
+
+        level_line = np.array([c1*x+c0 for x in self.line['x']])
+        new_trace = np.array( [h-h_new for h, h_new in \
+            zip(self.line['height'], level_line)] )
+
+        self.line['height'] = new_trace
+
+        if show:
+            fig, ax = plt.subplots()
+            ax.plot(
+                self.line['x'],
+                self.line['height'],
+            )
+
+            plt.show()
+
+        if savecsv:
+            with open(self.title+'_leveled.csv', 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile, delimiter=',',)
+
+                for x, y in zip(self.line['x'], self.line['height']):
+                    writer.writerow([x, y*1000])
+
+
 class profile_batch:
     '''
     Class for working with multiple profiles at once
     Relies on methods defined in 'profile' class
     '''
-
 
     def __init__(self, alldata=None, include=['casting']):
         ''' 
@@ -588,7 +637,7 @@ class profile_batch:
 
         for file in alldata:
             exported = profile(file)
-            title, samplenum = utilities.title_search_format(filename=file, 
+            title, inkname, samplenum = utilities.title_search_format(filename=file, 
                 include=include)
             self.lines[samplenum] = exported.line
             self.idxs[samplenum] = exported.idxs
@@ -647,10 +696,13 @@ class profile_batch:
                 isolatedtrace = self.lines[idx]['x'][start:end]*0.001 - \
                     self.lines[idx]['x'][start]*0.001
 
-                ax.plot(isolatedtrace, 
+                ax.plot(
+                    isolatedtrace, 
                     self.lines[idx]['height'][start:end],
-                    linewidth=2, color=plt.cm.tab10(coloridx[int(idx[1:])-1]), 
-                    label=str(idx))
+                    linewidth=2, 
+                    color=plt.cm.tab10(coloridx[int(idx[1:])-1]), 
+                    label=str(idx)
+                )
 
             mean_r = np.mean(rous)
             mean_w = np.mean(wavs)
@@ -699,7 +751,137 @@ class profile_batch:
         plt.close(fig)
 
 
+class profile_combined:
+    '''
+    Class for plotting both scan directions for one sample on same figure
+    Relies on methods defined in 'profile' class
+    '''
 
+    def __init__(self, files=None, include=['casting']):
+        ''' 
+        Initializes files according 'profile'
+        '''
+
+        # Acceptes lists of filenames
+        self.lines = {}
+        self.idxs = {}
+        self.metrics = {}
+        self.titles = {}
+
+        for filename in files:
+            exported = profile(filename)
+
+            dir_search = re.search(r'pe|pa', filename)
+            if dir_search.group(0) == 'pe':
+                direction = 'perp'
+            elif dir_search.group(0) == 'pa':
+                direction = 'par'
+
+            title, inkname, samplenum = utilities.title_search_format(
+                filename=filename, include=include)
+
+            self.lines[direction] = exported.line
+            self.idxs[direction] = exported.idxs
+            self.metrics[direction] = exported.metrics
+            self.titles[direction] = title
+
+
+    def plot_profile_combined(self, ylim=None, title=None, 
+        show=False, save=False, savename=None, imagetype='png'):
+        '''
+        Plots multiple profiles on same plot
+        '''
+
+        font = {'family': 'Arial', 'size': 24}
+        matplotlib.rc('font', **font)
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, 
+            figsize=(18,10), dpi=100)
+
+        for direction, ax in zip(('par', 'perp'), (ax1, ax2)):
+            start = self.idxs[direction][0]
+            end = self.idxs[direction][1]
+
+            midpoint = int((end-start)/2 + start)
+            x_mid = self.lines[direction]['x'][midpoint]
+
+            x_plot = (self.lines[direction]['x'] - x_mid)*0.001
+
+            # full trace, 20% opacity
+            ax.plot(
+                x_plot,
+                self.lines[direction]['height'],
+                color='#000000',
+                alpha=0.3,
+                linewidth=3,
+            )
+
+            # isolated trace, full opacity
+            ax.plot(
+                x_plot[start:end],
+                self.lines[direction]['height'][start:end],
+                color='#000000',
+                linewidth=3,
+            )
+
+            ax.set_ylabel('Height [µm]')
+
+        ax1.set_xlim([-6, 6])
+
+        if ylim:
+            ax.set_ylim(ylim)
+        else:
+            y_lim = ax1.get_ylim()
+            ax1.set_ylim([-10, y_lim[1]*1.1])
+            ax2.set_ylim([-10, y_lim[1]*1.1])
+
+        for direction, ax in zip(('par', 'perp'), (ax1, ax2)):
+            stats = {
+                'r': r'$R_q = $'+'%.2f µm'%self.metrics[direction]['R']['Rq'],
+                'w': r'$W_q = $'+'%.2f µm'%self.metrics[direction]['W']['Wq'],
+                'a': r'$P_a = $'+'%.2f µm'%self.metrics[direction]['P']['Pa'],
+            }
+
+            stats_text = stats['r']+'\n'+stats['w']+'\n'+stats['a']
+
+            x_tlim, y_tlim = ax.get_xlim(), ax.get_ylim()
+
+            x_tpos = 0.02*(x_tlim[1]-x_tlim[0]) + x_tlim[0]
+            y_tpos = 0.95*(y_tlim[1]-y_tlim[0]) + y_tlim[0]
+
+            ax.text(
+                x_tpos, 
+                y_tpos, 
+                stats_text, 
+                bbox=dict(
+                    facecolor='w', 
+                    edgecolor='k',
+                ),
+                verticalalignment='top',
+                horizontalalignment='left',
+                fontsize=20,
+            )
+
+        ax1.set_title('Parallel')
+        ax2.set_title('Perpendicular')
+        ax2.set_xlabel('Horizontal Position [mm]')
+
+        if title:
+            fig.suptitle(title)
+
+        # plt.tight_layout()
+
+
+        if save:
+            if savename:
+                plt.savefig(savename + '.' + imagetype)
+            else:
+                plt.savefig('combined_' + self.titles['par'] + '.' + imagetype)
+
+        if show:
+            plt.show()
+
+        plt.close(fig)
 
 
 
